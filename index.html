@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>BRS Community Chat</title>
+  <link rel="icon" type="image/png" href="./logo.png">
+  <link rel="stylesheet" href="./chat.css">
+</head>
+<body>
+
+  <!-- Sign-in screen -->
+  <section id="signin-screen" class="screen" hidden>
+    <div class="signin-card">
+      <h1>BRS Community</h1>
+      <p class="muted">Biohybrid Robotics Symposium participants only.</p>
+
+      <button id="btn-google-signin" class="primary-btn" type="button">
+        <span class="g-icon" aria-hidden="true"></span>
+        Sign in with Google
+      </button>
+
+      <details class="alt-signin">
+        <summary>Sign in with email link instead</summary>
+        <form id="form-email-signin" novalidate>
+          <input type="email" id="input-email" placeholder="you@example.com" required autocomplete="email">
+          <button type="submit" class="secondary-btn">Send magic link</button>
+          <p class="hint">
+            A sign-in link will be emailed to you. Open it in the same browser within 60 minutes.
+            If you use a different browser (e.g. phone → PC), you'll be asked to retype your email.
+          </p>
+        </form>
+        <p id="email-status" class="status" role="status" aria-live="polite"></p>
+      </details>
+
+      <p id="signin-error" class="error" role="alert" aria-live="assertive" hidden></p>
+    </div>
+  </section>
+
+  <!-- Profile setup (first sign-in only) -->
+  <section id="profile-screen" class="screen" hidden>
+    <div class="signin-card">
+      <h1>Welcome</h1>
+      <p class="muted">Tell others who you are.</p>
+      <form id="form-profile" novalidate>
+        <label>
+          Display name
+          <input type="text" id="input-display-name" required maxlength="40" autocomplete="name">
+        </label>
+        <label>
+          Affiliation
+          <input type="text" id="input-affiliation" placeholder="e.g. ETH Zurich / UTokyo" maxlength="80">
+        </label>
+        <button type="submit" class="primary-btn">Continue</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- Main chat -->
+  <section id="chat-screen" class="screen chat-layout" hidden>
+    <header class="chat-header">
+      <button id="btn-toggle-sidebar" class="icon-btn" type="button" aria-label="Toggle channels">
+        <span aria-hidden="true">☰</span>
+      </button>
+      <div class="brand" aria-label="BRS Community">
+        <img src="./logo.png" class="brand-logo" alt="" onerror="this.style.display='none'">
+        <span class="brand-full">BRS Community</span>
+        <span class="brand-short">BRS</span>
+      </div>
+      <span class="brand-sep" aria-hidden="true">/</span>
+      <h1 class="chat-title">
+        <span class="channel-hash">#</span>
+        <span id="current-channel-name">general</span>
+      </h1>
+      <button id="btn-members" class="icon-btn members-btn" type="button" title="Members">
+        <span aria-hidden="true">👥</span>
+        <span id="member-count">0</span>
+      </button>
+      <div class="chat-header-spacer"></div>
+      <div class="user-menu">
+        <button id="btn-user-menu" class="user-btn" type="button" aria-haspopup="true" aria-expanded="false">
+          <span id="user-menu-name"></span>
+          <span aria-hidden="true">▾</span>
+        </button>
+        <div id="user-menu-dropdown" class="dropdown" hidden>
+          <button id="btn-edit-profile" type="button">Edit profile</button>
+          <button id="btn-notif-prefs" type="button">Notification settings</button>
+          <button id="btn-show-bookmarks" type="button">Saved messages</button>
+          <button id="btn-export-channel" type="button">Export this channel…</button>
+          <button id="btn-admin-panel" type="button" hidden>🛡️ Admin panel</button>
+          <button id="btn-signout" type="button">Sign out</button>
+        </div>
+      </div>
+    </header>
+
+    <aside class="chat-sidebar" id="chat-sidebar">
+      <button id="btn-mentions-view" class="sidebar-mentions-btn" type="button">
+        <span aria-hidden="true">🔔</span>
+        <span>Mentions</span>
+        <span id="mentions-total" class="mention-pill-count" hidden>0</span>
+      </button>
+      <div class="sidebar-section-header">
+        <h2>Channels</h2>
+        <button id="btn-browse-channels" class="icon-btn" type="button" aria-label="Browse channels" title="Browse public channels">🔍</button>
+        <button id="btn-new-channel" class="icon-btn" type="button" aria-label="New channel" title="New public channel">+</button>
+      </div>
+      <ul id="channel-list" class="channel-list" role="list"></ul>
+
+      <div class="sidebar-section-header">
+        <h2>Private</h2>
+        <button id="btn-new-team" class="icon-btn" type="button" aria-label="New team" title="New private team">+</button>
+      </div>
+      <ul id="team-list" class="channel-list" role="list"></ul>
+
+      <div class="sidebar-section-header">
+        <h2>Direct Messages</h2>
+        <button id="btn-new-dm" class="icon-btn" type="button" aria-label="Start DM" title="Start a direct message">+</button>
+      </div>
+      <ul id="dm-list" class="channel-list" role="list"></ul>
+    </aside>
+
+    <main class="chat-main">
+      <div id="notification-banner" class="notification-banner" hidden>
+        <span>🔔 Turn on notifications to hear about new messages and mentions.</span>
+        <button type="button" id="btn-enable-notify" class="secondary-btn">Enable</button>
+        <button type="button" id="btn-dismiss-notify" class="icon-btn" aria-label="Dismiss">×</button>
+      </div>
+      <div id="pinned-bar" class="pinned-bar" hidden>
+        <button id="btn-pinned-toggle" class="pinned-toggle" type="button">
+          <span aria-hidden="true">📌</span>
+          <span><span id="pinned-count">0</span> pinned</span>
+          <span class="pinned-chevron" aria-hidden="true">▾</span>
+        </button>
+        <ol id="pinned-list" class="pinned-list" hidden></ol>
+      </div>
+      <div id="search-bar" class="search-bar" hidden>
+        <input type="search" id="input-search" placeholder="Search this channel (/ to open, Esc to close)">
+        <span id="search-count" class="search-count"></span>
+        <button type="button" id="btn-search-close" class="icon-btn" aria-label="Close search">×</button>
+      </div>
+      <div id="typing-indicator" class="typing-indicator" hidden></div>
+      <div id="messages-container" class="messages-container" aria-live="polite">
+        <div id="messages-loading" class="messages-loading">Loading…</div>
+        <div id="messages-empty" class="messages-empty" hidden>No messages yet. Say hi 👋</div>
+        <ol id="messages-list" class="messages-list" role="list"></ol>
+      </div>
+
+      <form id="form-compose" class="composer" novalidate>
+        <button type="button" id="btn-attach" class="icon-btn" aria-label="Attach image" title="Attach image">📎</button>
+        <button type="button" id="btn-poll" class="icon-btn" aria-label="Create poll" title="Create poll">📊</button>
+        <button type="button" id="btn-search" class="icon-btn" aria-label="Search channel" title="Search this channel (/)">🔍</button>
+        <input type="file" id="input-file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" hidden>
+        <textarea id="input-message" rows="1" placeholder="Message #general · Ctrl+Enter to send" maxlength="2000" aria-label="Message"></textarea>
+        <button type="submit" id="btn-send" class="primary-btn">Send</button>
+      </form>
+      <div id="mention-dropdown" class="mention-dropdown" hidden role="listbox"></div>
+      <div id="attachment-preview" class="attachment-preview" hidden>
+        <img id="attachment-thumb" alt="">
+        <span id="attachment-name"></span>
+        <button type="button" id="btn-attachment-remove" class="icon-btn" aria-label="Remove attachment">×</button>
+      </div>
+      <div id="upload-status" class="upload-status" role="status" aria-live="polite"></div>
+    </main>
+  </section>
+
+  <!-- New channel modal -->
+  <dialog id="dialog-new-channel" class="dialog">
+    <form id="form-new-channel" method="dialog" novalidate>
+      <h2>New channel</h2>
+      <label>
+        Name
+        <input type="text" id="input-channel-name" required minlength="2" maxlength="32"
+               pattern="[a-z0-9][a-z0-9_-]*" placeholder="lab-tour">
+        <small>lowercase letters, digits, hyphens, underscores</small>
+      </label>
+      <label>
+        Description (optional)
+        <input type="text" id="input-channel-desc" maxlength="120">
+      </label>
+      <div class="dialog-actions">
+        <button type="button" id="btn-new-channel-cancel">Cancel</button>
+        <button type="submit" class="primary-btn">Create</button>
+      </div>
+      <p id="new-channel-error" class="error" hidden></p>
+    </form>
+  </dialog>
+
+  <!-- Thread panel (side panel on the right) -->
+  <aside id="thread-panel" class="thread-panel" hidden>
+    <header class="thread-header">
+      <h2>Thread</h2>
+      <button id="btn-thread-close" class="icon-btn" aria-label="Close thread">×</button>
+    </header>
+    <div class="thread-scroll">
+      <div id="thread-parent" class="thread-parent"></div>
+      <div id="thread-replies" class="thread-replies"></div>
+    </div>
+    <form id="form-thread-compose" class="composer thread-composer" novalidate>
+      <textarea id="input-thread-message" rows="1" placeholder="Reply… · Ctrl+Enter to send" maxlength="2000"></textarea>
+      <button type="submit" class="primary-btn">Send</button>
+    </form>
+  </aside>
+
+  <!-- Channel switcher (Ctrl+K) -->
+  <dialog id="dialog-channel-switcher" class="dialog channel-switcher-dialog">
+    <form method="dialog" novalidate>
+      <input type="text" id="input-switcher" placeholder="Jump to channel or user…" autocomplete="off">
+      <div id="switcher-results" class="switcher-results" role="listbox"></div>
+    </form>
+  </dialog>
+
+  <!-- Bookmarks dialog -->
+  <dialog id="dialog-bookmarks" class="dialog bookmarks-dialog">
+    <form method="dialog" novalidate>
+      <h2>Saved messages</h2>
+      <div id="bookmarks-list" class="bookmarks-list"></div>
+      <div class="dialog-actions">
+        <button type="button" id="btn-bookmarks-close" class="primary-btn">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Poll builder dialog -->
+  <dialog id="dialog-poll" class="dialog">
+    <form id="form-poll" method="dialog" novalidate>
+      <h2>Create poll</h2>
+      <label>
+        Question
+        <input type="text" id="poll-question" required maxlength="200" placeholder="Where for dinner?">
+      </label>
+      <label>
+        Options (one per line)
+        <textarea id="poll-options" required rows="4" placeholder="Ramen&#10;Sushi&#10;Izakaya"></textarea>
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" id="poll-multi">
+        <span>Allow multiple answers per person</span>
+      </label>
+      <div class="dialog-actions">
+        <button type="button" id="btn-poll-cancel">Cancel</button>
+        <button type="submit" class="primary-btn">Post poll</button>
+      </div>
+      <p id="poll-error" class="error" hidden></p>
+    </form>
+  </dialog>
+
+  <!-- Admin panel dialog -->
+  <dialog id="dialog-admin" class="dialog">
+    <form method="dialog" novalidate>
+      <h2>🛡️ Admin panel</h2>
+      <p class="hint">Admins can remove any member from any channel (except #general) and manage the admin list.</p>
+
+      <fieldset class="notif-group">
+        <legend>Administrators</legend>
+        <div id="admin-list"></div>
+        <label>
+          Add admin by email
+          <input type="email" id="input-new-admin" placeholder="someone@example.com">
+        </label>
+        <button type="button" id="btn-add-admin" class="secondary-btn" style="width:auto; padding:6px 14px; margin-top:6px">Add</button>
+      </fieldset>
+
+      <div class="dialog-actions">
+        <button type="button" id="btn-admin-close" class="primary-btn">Close</button>
+      </div>
+      <p id="admin-error" class="error" hidden></p>
+    </form>
+  </dialog>
+
+  <!-- Browse public channels dialog -->
+  <dialog id="dialog-browse-channels" class="dialog bookmarks-dialog">
+    <form method="dialog" novalidate>
+      <h2>Browse public channels</h2>
+      <p class="hint">Public channels anyone can join. Private teams are invite-only and stay hidden until you're added.</p>
+      <div id="browse-channels-list" class="bookmarks-list"></div>
+      <div class="dialog-actions">
+        <button type="button" id="btn-browse-channels-close" class="primary-btn">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Members dialog -->
+  <dialog id="dialog-members" class="dialog">
+    <form id="form-members" method="dialog" novalidate>
+      <h2 id="members-title">Members</h2>
+      <p class="hint" id="members-hint"></p>
+      <div id="members-list" class="member-picker-list"></div>
+      <h3 class="member-picker-sub">Add someone</h3>
+      <div id="add-member-list" class="member-picker-list"></div>
+      <div class="dialog-actions">
+        <button type="button" id="btn-members-close" class="primary-btn">Done</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- New team (private channel) dialog -->
+  <dialog id="dialog-new-team" class="dialog">
+    <form id="form-new-team" method="dialog" novalidate>
+      <h2>New private team</h2>
+      <label>
+        Team name
+        <input type="text" id="input-team-name" required minlength="2" maxlength="32"
+               pattern="[a-z0-9][a-z0-9_-]*" placeholder="sensor-team">
+        <small>lowercase letters, digits, hyphens, underscores</small>
+      </label>
+      <label>
+        Description (optional)
+        <input type="text" id="input-team-desc" maxlength="120">
+      </label>
+      <fieldset class="member-picker">
+        <legend>Members</legend>
+        <p class="hint">You're included automatically.</p>
+        <div id="team-member-list" class="member-picker-list"></div>
+      </fieldset>
+      <div class="dialog-actions">
+        <button type="button" id="btn-new-team-cancel">Cancel</button>
+        <button type="submit" class="primary-btn">Create</button>
+      </div>
+      <p id="new-team-error" class="error" hidden></p>
+    </form>
+  </dialog>
+
+  <!-- Mentions view dialog -->
+  <dialog id="dialog-mentions" class="dialog bookmarks-dialog">
+    <form method="dialog" novalidate>
+      <h2>🔔 Mentions</h2>
+      <p class="hint">Recent messages that mention you or broadcast to channels you're in.</p>
+      <div id="mentions-view-list" class="bookmarks-list"></div>
+      <div class="dialog-actions">
+        <button type="button" id="btn-mentions-close" class="primary-btn">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Notification preferences dialog -->
+  <dialog id="dialog-notif-prefs" class="dialog">
+    <form id="form-notif-prefs" method="dialog" novalidate>
+      <h2>Notification settings</h2>
+      <p class="hint">
+        Choose what should pop up as a browser notification (PC or Android).
+        iOS Safari needs the app added to Home Screen for push; email delivery
+        arrives with the Phase A upgrade.
+      </p>
+
+      <fieldset class="notif-group">
+        <legend>Browser notifications</legend>
+        <label class="checkbox-row">
+          <input type="checkbox" id="notif-dm">
+          <span>Direct messages to me</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="notif-mention">
+          <span>Personal @mentions of me</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="notif-channel">
+          <span>@channel broadcasts in channels I'm in</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="notif-reactions">
+          <span>Reactions on my messages</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="notif-all">
+          <span>Every message in every channel (noisy!)</span>
+        </label>
+      </fieldset>
+
+      <fieldset class="notif-group">
+        <legend>Forward to Slack / Teams / Discord</legend>
+        <p class="hint">
+          Paste an <strong>Incoming Webhook URL</strong> from your own Slack/Teams/Discord.
+          While you have BRS Community open in any tab, matching events are forwarded there —
+          so your phone's Slack/Teams/Discord app rings you.
+        </p>
+        <label>
+          Slack webhook URL
+          <input type="url" id="webhook-slack" placeholder="https://hooks.slack.com/services/…" maxlength="500">
+          <small><a href="https://api.slack.com/messaging/webhooks" target="_blank" rel="noopener noreferrer">How to create one</a></small>
+        </label>
+        <label>
+          Microsoft Teams webhook URL
+          <input type="url" id="webhook-teams" placeholder="https://…webhook.office.com/…" maxlength="500">
+        </label>
+        <label>
+          Discord webhook URL
+          <input type="url" id="webhook-discord" placeholder="https://discord.com/api/webhooks/…" maxlength="500">
+        </label>
+        <p class="hint">Forward which events:</p>
+        <label class="checkbox-row">
+          <input type="checkbox" id="webhook-dm">
+          <span>Direct messages</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="webhook-mention">
+          <span>Personal @mentions</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="webhook-channel">
+          <span>@channel broadcasts</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="webhook-all-replies">
+          <span>All thread replies (on any message)</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="webhook-all">
+          <span>Every message in every channel (noisy!)</span>
+        </label>
+        <button type="button" id="btn-webhook-test" class="secondary-btn" style="width:auto; padding:6px 14px; margin-top:6px">Send a test</button>
+        <p id="webhook-test-status" class="status"></p>
+      </fieldset>
+
+      <!--
+        Email delivery is FROZEN for now. The schema and save path are kept so
+        that existing values in Firestore are preserved, and the UI can be
+        re-enabled by removing the `hidden` attribute below when we decide to
+        ship email digests (Phase A or later).
+      -->
+      <fieldset class="notif-group" disabled hidden>
+        <legend>Email delivery (frozen)</legend>
+        <label class="checkbox-row">
+          <input type="checkbox" id="notif-email-mention">
+          <span>Email me for personal @mentions</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="notif-email-dm">
+          <span>Email me for direct messages</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="notif-email-channel">
+          <span>Email me for @channel broadcasts</span>
+        </label>
+      </fieldset>
+
+      <div class="dialog-actions">
+        <button type="button" id="btn-notif-prefs-cancel">Cancel</button>
+        <button type="submit" class="primary-btn">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Edit profile dialog -->
+  <dialog id="dialog-edit-profile" class="dialog">
+    <form id="form-edit-profile" method="dialog" novalidate>
+      <h2>Edit profile</h2>
+      <div class="profile-preview">
+        <span id="profile-preview-avatar"></span>
+      </div>
+      <label>
+        Display name
+        <input type="text" id="edit-display-name" required maxlength="40" autocomplete="name">
+      </label>
+      <label>
+        Affiliation
+        <input type="text" id="edit-affiliation" maxlength="80" placeholder="ETH Zurich / UTokyo">
+      </label>
+      <label>
+        Avatar
+        <div class="avatar-input-row">
+          <button type="button" id="btn-upload-avatar" class="secondary-btn avatar-upload-btn">Upload image…</button>
+          <input type="file" id="input-avatar-file" accept="image/*" hidden>
+          <button type="button" id="btn-clear-avatar" class="icon-btn" title="Use default">Reset</button>
+        </div>
+        <small>Or paste a URL below. Leave blank to use your Google photo or initials.</small>
+        <input type="url" id="edit-photo-url" maxlength="2000000" placeholder="https://…/your-photo.jpg" style="margin-top:6px">
+      </label>
+      <div class="dialog-actions">
+        <button type="button" id="btn-edit-profile-cancel">Cancel</button>
+        <button type="submit" class="primary-btn">Save</button>
+      </div>
+      <p id="edit-profile-error" class="error" hidden></p>
+    </form>
+  </dialog>
+
+  <!-- Add custom reaction dialog -->
+  <dialog id="dialog-new-reaction" class="dialog">
+    <form id="form-new-reaction" method="dialog" novalidate>
+      <h2>Add a stamp</h2>
+      <p class="hint">Shared with everyone on BRS Community.</p>
+      <label>
+        Emoji
+        <input type="text" id="input-reaction-emoji" required maxlength="8" placeholder="🎊">
+      </label>
+      <label>
+        Label (optional)
+        <input type="text" id="input-reaction-label" maxlength="20" placeholder="e.g. Party time!">
+        <small>Leave blank for an emoji-only stamp.</small>
+      </label>
+      <label>
+        Color (used only if label is set)
+        <input type="color" id="input-reaction-color" value="#667eea">
+      </label>
+      <div class="dialog-actions">
+        <button type="button" id="btn-new-reaction-cancel">Cancel</button>
+        <button type="submit" class="primary-btn">Add</button>
+      </div>
+      <p id="new-reaction-error" class="error" hidden></p>
+    </form>
+  </dialog>
+
+  <!-- Start DM dialog -->
+  <dialog id="dialog-new-dm" class="dialog">
+    <form id="form-new-dm" method="dialog" novalidate>
+      <h2>Start a direct message</h2>
+      <p class="hint">Select someone to chat with one-on-one.</p>
+      <div id="dm-member-list" class="member-picker-list"></div>
+      <div class="dialog-actions">
+        <button type="button" id="btn-new-dm-cancel">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Lightbox -->
+  <dialog id="lightbox" class="lightbox">
+    <button id="btn-lightbox-close" class="icon-btn lightbox-close" aria-label="Close">×</button>
+    <img id="lightbox-img" alt="">
+  </dialog>
+
+  <!-- Fatal error banner -->
+  <div id="fatal-error" class="fatal-error" role="alert" hidden></div>
+
+  <script type="module" src="./chat.js"></script>
+</body>
+</html>

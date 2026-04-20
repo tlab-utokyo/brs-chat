@@ -1,0 +1,3410 @@
+// BRS Community Chat — main client script.
+// Depends on Firebase v10 modular SDK (loaded from gstatic CDN).
+// Cloudinary uploads use signed params from a Cloud Function.
+
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
+import {
+  getAuth, GoogleAuthProvider, signInWithPopup, signOut,
+  onAuthStateChanged, sendSignInLinkToEmail, isSignInWithEmailLink,
+  signInWithEmailLink,
+} from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
+import {
+  getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc,
+  getDoc, getDocs, query, where, orderBy, limit, onSnapshot,
+  serverTimestamp, Timestamp, arrayUnion, arrayRemove, increment, deleteField,
+} from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+import {
+  getFunctions, httpsCallable,
+} from "https://www.gstatic.com/firebasejs/10.13.2/firebase-functions.js";
+
+import { firebaseConfig, cloudinaryConfig, functionsRegion, PHASE_0 } from "./firebase-config.js";
+
+// ===========================================================================
+// Setup
+// ===========================================================================
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const functions = getFunctions(app, functionsRegion);
+
+const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: "select_account" });
+
+// Phase 0: hide image attach UI since getUploadSignature Cloud Function
+// isn't deployed yet (requires Blaze).
+if (PHASE_0) {
+  document.addEventListener("DOMContentLoaded", () => {
+    const attachBtn = document.getElementById("btn-attach");
+    if (attachBtn) attachBtn.style.display = "none";
+  });
+}
+
+// Inherit theme from parent site if embedded later.
+(function initTheme() {
+  try {
+    const parentTheme = window.parent?.document?.documentElement?.dataset?.theme;
+    if (parentTheme) document.documentElement.dataset.theme = parentTheme;
+  } catch (_) { /* cross-origin, ignore */ }
+  if (!document.documentElement.dataset.theme) {
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.dataset.theme = prefersDark ? "dark" : "light";
+  }
+})();
+
+// ===========================================================================
+// DOM refs
+// ===========================================================================
+
+const $ = (id) => document.getElementById(id);
+const el = {
+  signinScreen: $("signin-screen"),
+  profileScreen: $("profile-screen"),
+  chatScreen: $("chat-screen"),
+  btnGoogle: $("btn-google-signin"),
+  formEmailSignin: $("form-email-signin"),
+  inputEmail: $("input-email"),
+  emailStatus: $("email-status"),
+  signinError: $("signin-error"),
+  formProfile: $("form-profile"),
+  inputDisplayName: $("input-display-name"),
+  inputAffiliation: $("input-affiliation"),
+  userMenuName: $("user-menu-name"),
+  btnUserMenu: $("btn-user-menu"),
+  userMenuDropdown: $("user-menu-dropdown"),
+  btnSignout: $("btn-signout"),
+  btnEditProfile: $("btn-edit-profile"),
+  dialogEditProfile: $("dialog-edit-profile"),
+  formEditProfile: $("form-edit-profile"),
+  profilePreviewAvatar: $("profile-preview-avatar"),
+  editDisplayName: $("edit-display-name"),
+  editAffiliation: $("edit-affiliation"),
+  editPhotoUrl: $("edit-photo-url"),
+  btnEditProfileCancel: $("btn-edit-profile-cancel"),
+  editProfileError: $("edit-profile-error"),
+  btnUploadAvatar: $("btn-upload-avatar"),
+  inputAvatarFile: $("input-avatar-file"),
+  btnClearAvatar: $("btn-clear-avatar"),
+  btnToggleSidebar: $("btn-toggle-sidebar"),
+  chatSidebar: $("chat-sidebar"),
+  channelList: $("channel-list"),
+  teamList: $("team-list"),
+  dmList: $("dm-list"),
+  btnNewChannel: $("btn-new-channel"),
+  btnBrowseChannels: $("btn-browse-channels"),
+  dialogBrowseChannels: $("dialog-browse-channels"),
+  browseChannelsList: $("browse-channels-list"),
+  btnBrowseChannelsClose: $("btn-browse-channels-close"),
+  btnNewTeam: $("btn-new-team"),
+  btnNewDm: $("btn-new-dm"),
+  dialogNewChannel: $("dialog-new-channel"),
+  formNewChannel: $("form-new-channel"),
+  inputChannelName: $("input-channel-name"),
+  inputChannelDesc: $("input-channel-desc"),
+  btnNewChannelCancel: $("btn-new-channel-cancel"),
+  newChannelError: $("new-channel-error"),
+  dialogNewTeam: $("dialog-new-team"),
+  formNewTeam: $("form-new-team"),
+  inputTeamName: $("input-team-name"),
+  inputTeamDesc: $("input-team-desc"),
+  teamMemberList: $("team-member-list"),
+  btnNewTeamCancel: $("btn-new-team-cancel"),
+  newTeamError: $("new-team-error"),
+  dialogNewDm: $("dialog-new-dm"),
+  formNewDm: $("form-new-dm"),
+  dmMemberList: $("dm-member-list"),
+  btnNewDmCancel: $("btn-new-dm-cancel"),
+  dialogNewReaction: $("dialog-new-reaction"),
+  formNewReaction: $("form-new-reaction"),
+  inputReactionEmoji: $("input-reaction-emoji"),
+  inputReactionLabel: $("input-reaction-label"),
+  inputReactionColor: $("input-reaction-color"),
+  btnNewReactionCancel: $("btn-new-reaction-cancel"),
+  newReactionError: $("new-reaction-error"),
+  currentChannelName: $("current-channel-name"),
+  btnMembers: $("btn-members"),
+  memberCount: $("member-count"),
+  dialogMembers: $("dialog-members"),
+  formMembers: $("form-members"),
+  membersTitle: $("members-title"),
+  membersHint: $("members-hint"),
+  membersList: $("members-list"),
+  addMemberList: $("add-member-list"),
+  btnMembersClose: $("btn-members-close"),
+  // Pinned / search / typing
+  pinnedBar: $("pinned-bar"),
+  btnPinnedToggle: $("btn-pinned-toggle"),
+  pinnedCount: $("pinned-count"),
+  pinnedList: $("pinned-list"),
+  searchBar: $("search-bar"),
+  inputSearch: $("input-search"),
+  searchCount: $("search-count"),
+  btnSearchClose: $("btn-search-close"),
+  btnSearch: $("btn-search"),
+  typingIndicator: $("typing-indicator"),
+  // Thread
+  threadPanel: $("thread-panel"),
+  btnThreadClose: $("btn-thread-close"),
+  threadParent: $("thread-parent"),
+  threadReplies: $("thread-replies"),
+  formThreadCompose: $("form-thread-compose"),
+  inputThreadMessage: $("input-thread-message"),
+  // Switcher
+  dialogSwitcher: $("dialog-channel-switcher"),
+  inputSwitcher: $("input-switcher"),
+  switcherResults: $("switcher-results"),
+  // Bookmarks
+  btnShowBookmarks: $("btn-show-bookmarks"),
+  btnAdminPanel: $("btn-admin-panel"),
+  dialogAdmin: $("dialog-admin"),
+  adminList: $("admin-list"),
+  inputNewAdmin: $("input-new-admin"),
+  btnAddAdmin: $("btn-add-admin"),
+  btnAdminClose: $("btn-admin-close"),
+  adminError: $("admin-error"),
+  dialogBookmarks: $("dialog-bookmarks"),
+  bookmarksList: $("bookmarks-list"),
+  btnBookmarksClose: $("btn-bookmarks-close"),
+  // Export
+  btnExportChannel: $("btn-export-channel"),
+  // Notification prefs
+  btnNotifPrefs: $("btn-notif-prefs"),
+  dialogNotifPrefs: $("dialog-notif-prefs"),
+  formNotifPrefs: $("form-notif-prefs"),
+  btnNotifPrefsCancel: $("btn-notif-prefs-cancel"),
+  notifDm: $("notif-dm"),
+  notifMention: $("notif-mention"),
+  notifChannel: $("notif-channel"),
+  notifReactions: $("notif-reactions"),
+  notifAll: $("notif-all"),
+  notifEmailMention: $("notif-email-mention"),
+  notifEmailDm: $("notif-email-dm"),
+  notifEmailChannel: $("notif-email-channel"),
+  webhookSlack: $("webhook-slack"),
+  webhookTeams: $("webhook-teams"),
+  webhookDiscord: $("webhook-discord"),
+  webhookDm: $("webhook-dm"),
+  webhookMention: $("webhook-mention"),
+  webhookChannel: $("webhook-channel"),
+  webhookAllReplies: $("webhook-all-replies"),
+  webhookAll: $("webhook-all"),
+  btnWebhookTest: $("btn-webhook-test"),
+  webhookTestStatus: $("webhook-test-status"),
+  // Mentions view
+  btnMentionsView: $("btn-mentions-view"),
+  mentionsTotal: $("mentions-total"),
+  dialogMentionsView: $("dialog-mentions"),
+  mentionsViewList: $("mentions-view-list"),
+  btnMentionsViewClose: $("btn-mentions-close"),
+  // Poll
+  btnPoll: $("btn-poll"),
+  dialogPoll: $("dialog-poll"),
+  formPoll: $("form-poll"),
+  pollQuestion: $("poll-question"),
+  pollOptions: $("poll-options"),
+  pollMulti: $("poll-multi"),
+  btnPollCancel: $("btn-poll-cancel"),
+  pollError: $("poll-error"),
+  messagesLoading: $("messages-loading"),
+  messagesEmpty: $("messages-empty"),
+  messagesList: $("messages-list"),
+  messagesContainer: $("messages-container"),
+  formCompose: $("form-compose"),
+  inputMessage: $("input-message"),
+  btnAttach: $("btn-attach"),
+  inputFile: $("input-file"),
+  attachmentPreview: $("attachment-preview"),
+  attachmentThumb: $("attachment-thumb"),
+  attachmentName: $("attachment-name"),
+  btnAttachmentRemove: $("btn-attachment-remove"),
+  uploadStatus: $("upload-status"),
+  mentionDropdown: $("mention-dropdown"),
+  notificationBanner: $("notification-banner"),
+  btnEnableNotify: $("btn-enable-notify"),
+  btnDismissNotify: $("btn-dismiss-notify"),
+  lightbox: $("lightbox"),
+  lightboxImg: $("lightbox-img"),
+  btnLightboxClose: $("btn-lightbox-close"),
+  fatalError: $("fatal-error"),
+};
+
+// ===========================================================================
+// State
+// ===========================================================================
+
+const state = {
+  user: null,
+  userDoc: null,              // users/{uid} Firestore doc data
+  channels: [],               // array of { id, ...data } — merged public + private + dm
+  currentChannelId: null,
+  unsubPublicChannels: null,
+  unsubPrivateChannels: null,
+  unsubUsers: null,
+  unsubMessages: null,
+  pendingAttachment: null,    // { file, blob, width, height }
+  lastReadByChannel: {},      // mirror of userDoc
+  channelLastMsgTs: {},       // last message ts per channel for unread calc
+  allUsers: [],               // array of { uid, ...users/{uid} data }
+  customReactions: [],        // from config/reactions.custom
+  unsubReactions: null,
+  // New: search, thread, bookmarks, polls, presence, typing
+  searchQuery: "",
+  currentMessages: [],        // last rendered docs
+  threadMsgId: null,
+  threadParent: null,
+  unsubThreadReplies: null,
+  typingByChannel: new Map(), // channelId -> { uid -> ts }
+  unsubTyping: null,
+  typingWriteTimer: null,
+  heartbeatTimer: null,
+  pendingScrollToMsg: null,   // msg id to scroll-to after messages load (permalink)
+  recentMessagesByChannel: new Map(),  // channelId -> array of recent message docs
+  unreadMentionsByChannel: new Map(),  // channelId -> count of unread mentions for me
+  userSecrets: null,          // userSecrets/{uid} — private (webhooks, etc.) — not visible to others
+  unsubSecrets: null,
+  adminEmails: [],            // from config/admins.emails
+  unsubAdmins: null,
+};
+
+function isAdmin() {
+  return state.user && state.adminEmails.includes((state.user.email || "").toLowerCase());
+}
+
+// Base tab title, preserved so the unread badge can prefix it.
+const BASE_TAB_TITLE = document.title;
+
+// ===========================================================================
+// UI helpers
+// ===========================================================================
+
+function showScreen(name) {
+  el.signinScreen.hidden = name !== "signin";
+  el.profileScreen.hidden = name !== "profile";
+  el.chatScreen.hidden = name !== "chat";
+}
+
+function showFatal(msg) {
+  el.fatalError.textContent = msg;
+  el.fatalError.hidden = false;
+}
+function clearFatal() { el.fatalError.hidden = true; }
+
+function showSigninError(msg) {
+  el.signinError.textContent = msg;
+  el.signinError.hidden = false;
+}
+function clearSigninError() { el.signinError.hidden = true; }
+
+function escHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+// Simple URL linkifier + @mention renderer.
+function mentionSlug(name) {
+  return (name || "").trim().split(/\s+/)[0].toLowerCase().replace(/[^a-z0-9_\-]/g, "");
+}
+function findUserByMentionSlug(slug) {
+  if (!slug) return null;
+  const lower = slug.toLowerCase();
+  return state.allUsers.find((u) => mentionSlug(u.displayName) === lower);
+}
+function parseMentions(text) {
+  const uids = new Set();
+  let broadcast = false;
+  const re = /(^|\s)@([a-zA-Z0-9_\-]+)/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const word = m[2].toLowerCase();
+    if (word === "channel") {
+      broadcast = true;
+    } else {
+      const u = findUserByMentionSlug(word);
+      if (u) uids.add(u.uid);
+    }
+  }
+  return { mentionUids: [...uids], mentionsEveryone: broadcast };
+}
+// Renders a message body: Markdown formatting + URLs + @mentions.
+// Returns { html, ytId } where ytId is a YouTube video id if detected (for embed).
+function renderMessageBody(text) {
+  let ytId = null;
+  // 1) Protect fenced code blocks (```...```) — extract before any other processing.
+  const blocks = [];
+  let s = text.replace(/```([\s\S]*?)```/g, (_, code) => {
+    const idx = blocks.length;
+    blocks.push(code);
+    return `\uE000BLOCK${idx}\uE001`;
+  });
+  // 2) Inline code (`...`)
+  const inlineCodes = [];
+  s = s.replace(/`([^`\n]+?)`/g, (_, code) => {
+    const idx = inlineCodes.length;
+    inlineCodes.push(code);
+    return `\uE000INLINE${idx}\uE001`;
+  });
+  // 3) Escape HTML on the rest
+  let html = escHtml(s);
+  // 4) Bold and italic (non-greedy, simple)
+  html = html.replace(/\*\*([^*\n][^*\n]*?)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/(^|[^*])\*(?!\s)([^*\n]+?)\*(?!\*)/g, "$1<em>$2</em>");
+  // 5) URLs
+  html = html.replace(/\b((?:https?:\/\/|www\.)[^\s<>"')]+[^\s<>"')\.,;:!?])/gi, (url) => {
+    const href = url.startsWith("www.") ? `https://${url}` : url;
+    // Detect YouTube video id (first one wins for embed)
+    if (!ytId) {
+      const m = href.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([A-Za-z0-9_\-]{6,})/);
+      if (m) ytId = m[1];
+    }
+    // arXiv style link
+    const ax = href.match(/arxiv\.org\/(?:abs|pdf)\/([0-9]{4}\.[0-9]{4,5})/i);
+    if (ax) {
+      return `<a class="arxiv-link" href="${href}" target="_blank" rel="noopener noreferrer">arXiv:${ax[1]}</a>`;
+    }
+    return `<a href="${href}" target="_blank" rel="noopener noreferrer">${url}</a>`;
+  });
+  // 6) @mentions
+  html = html.replace(/(^|\s)@([a-zA-Z0-9_\-]+)/g, (full, pre, word) => {
+    const lw = word.toLowerCase();
+    if (lw === "channel") {
+      return `${pre}<span class="mention-pill broadcast">@${escHtml(word)}</span>`;
+    }
+    const u = findUserByMentionSlug(word);
+    if (u) {
+      return `${pre}<span class="mention-pill" title="${escHtml(u.displayName)}">@${escHtml(word)}</span>`;
+    }
+    return full;
+  });
+  // 7) Restore inline code (escape inside)
+  html = html.replace(/\uE000INLINE(\d+)\uE001/g, (_, i) =>
+    `<code class="md-code">${escHtml(inlineCodes[+i])}</code>`,
+  );
+  // 8) Restore fenced code blocks
+  html = html.replace(/\uE000BLOCK(\d+)\uE001/g, (_, i) =>
+    `<pre class="md-pre">${escHtml(blocks[+i])}</pre>`,
+  );
+  // 9) Line breaks (convert \n to <br> outside <pre>)
+  html = html.replace(/\n/g, "<br>");
+  // But strip <br> inside <pre> (since <pre> preserves \n already — we already escaped \n->br, fix this)
+  html = html.replace(/<pre class="md-pre">([\s\S]*?)<\/pre>/g, (m, inner) =>
+    `<pre class="md-pre">${inner.replace(/<br>/g, "\n")}</pre>`,
+  );
+  return { html, ytId };
+}
+
+// Kept for compatibility where only text-to-html is needed.
+function linkifyText(text) {
+  return renderMessageBody(text).html;
+}
+
+// Build an avatar element for a user. Uses photoURL if present,
+// otherwise a colored circle with the first letter of the name.
+const AVATAR_COLORS = [
+  "#667eea", "#764ba2", "#17a2b8", "#e67e22", "#27ae60",
+  "#c0392b", "#d35400", "#2980b9", "#8e44ad", "#16a085",
+];
+function avatarColorFor(key) {
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) | 0;
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+}
+function renderAvatar(user, size) {
+  const span = document.createElement("span");
+  span.className = "avatar" + (size ? " avatar-" + size : "");
+  const name = user?.displayName || user?.authorName || user?.email || "?";
+  if (user?.photoURL) {
+    const img = document.createElement("img");
+    img.src = user.photoURL;
+    img.alt = "";
+    img.referrerPolicy = "no-referrer"; // Google photo URLs need this
+    img.addEventListener("error", () => {
+      // Fallback if the photo fails to load.
+      img.remove();
+      span.textContent = (name[0] || "?").toUpperCase();
+      span.style.background = avatarColorFor(user?.uid || user?.authorUid || name);
+    });
+    span.appendChild(img);
+  } else {
+    span.textContent = (name[0] || "?").toUpperCase();
+    span.style.background = avatarColorFor(user?.uid || user?.authorUid || name);
+  }
+  // Online presence dot (green) if lastSeenAt is recent.
+  // Look up fresh lastSeenAt from allUsers cache so we don't rely on the caller.
+  const fresh = getUserByUid(user?.uid);
+  if (isUserOnline(fresh || user)) span.classList.add("online");
+  return span;
+}
+
+function getUserByUid(uid) {
+  return state.allUsers.find((u) => u.uid === uid);
+}
+
+function formatTime(ts) {
+  if (!ts) return "";
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const opts = sameDay
+    ? { hour: "2-digit", minute: "2-digit" }
+    : { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" };
+  return d.toLocaleString(undefined, opts);
+}
+
+function autoResizeTextarea(ta) {
+  ta.style.height = "auto";
+  ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
+}
+
+// ===========================================================================
+// Auth flow
+// ===========================================================================
+
+el.btnGoogle.addEventListener("click", async () => {
+  clearSigninError();
+  el.btnGoogle.disabled = true;
+  try {
+    await signInWithPopup(auth, googleProvider);
+  } catch (err) {
+    console.error(err);
+    showSigninError(friendlyAuthError(err));
+  } finally {
+    el.btnGoogle.disabled = false;
+  }
+});
+
+function friendlyAuthError(err) {
+  // beforeSignIn throws HttpsError → Firebase wraps as auth/internal-error or
+  // auth/admin-restricted-operation. Message contains our text.
+  const msg = err?.message || "";
+  if (msg.includes("not on the BRS participant list") ||
+      err?.code === "auth/admin-restricted-operation") {
+    return "This email is not on the BRS participant list. Please contact the organizers.";
+  }
+  if (err?.code === "auth/popup-closed-by-user") {
+    return "Sign-in cancelled.";
+  }
+  if (err?.code === "auth/network-request-failed") {
+    return "Network error. Check your connection and try again.";
+  }
+  return err?.message || "Sign-in failed. Please try again.";
+}
+
+// --- Email magic link ---
+
+const EMAIL_LINK_STORAGE_KEY = "brsChat.emailForSignIn";
+
+el.formEmailSignin.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  clearSigninError();
+  const email = el.inputEmail.value.trim();
+  if (!email) return;
+  el.emailStatus.textContent = "Sending link…";
+  try {
+    const url = window.location.origin + window.location.pathname;
+    await sendSignInLinkToEmail(auth, email, { url, handleCodeInApp: true });
+    window.localStorage.setItem(EMAIL_LINK_STORAGE_KEY, email);
+    el.emailStatus.textContent = `Sign-in link sent to ${email}. Check your inbox (and spam folder). Links expire in 60 minutes.`;
+  } catch (err) {
+    console.error(err);
+    el.emailStatus.textContent = "";
+    showSigninError(friendlyAuthError(err));
+  }
+});
+
+async function handleEmailLinkReturn() {
+  if (!isSignInWithEmailLink(auth, window.location.href)) return;
+  let email = window.localStorage.getItem(EMAIL_LINK_STORAGE_KEY);
+  if (!email) {
+    email = window.prompt("Please re-enter your email to complete sign-in:");
+    if (!email) return;
+  }
+  try {
+    await signInWithEmailLink(auth, email, window.location.href);
+    window.localStorage.removeItem(EMAIL_LINK_STORAGE_KEY);
+    // Strip the auth params from URL.
+    history.replaceState({}, "", window.location.pathname);
+  } catch (err) {
+    console.error(err);
+    showSigninError(friendlyAuthError(err));
+  }
+}
+
+// --- Sign out ---
+
+el.btnSignout.addEventListener("click", async () => {
+  await signOut(auth);
+});
+
+// --- Edit profile ---
+
+el.btnEditProfile.addEventListener("click", () => {
+  el.userMenuDropdown.hidden = true;
+  el.btnUserMenu.setAttribute("aria-expanded", "false");
+  openEditProfileDialog();
+});
+
+function openEditProfileDialog() {
+  el.editDisplayName.value = state.userDoc?.displayName || "";
+  el.editAffiliation.value = state.userDoc?.affiliation || "";
+  el.editPhotoUrl.value = state.userDoc?.photoURL || state.user?.photoURL || "";
+  el.editProfileError.hidden = true;
+  updateProfilePreview();
+  el.dialogEditProfile.showModal();
+}
+
+function updateProfilePreview() {
+  el.profilePreviewAvatar.innerHTML = "";
+  const av = renderAvatar({
+    uid: state.user.uid,
+    displayName: el.editDisplayName.value.trim() || state.userDoc?.displayName,
+    photoURL: el.editPhotoUrl.value.trim() || null,
+  });
+  el.profilePreviewAvatar.appendChild(av);
+}
+el.editDisplayName.addEventListener("input", updateProfilePreview);
+el.editPhotoUrl.addEventListener("input", updateProfilePreview);
+
+// Upload + compress avatar → data URL in the photoURL field.
+el.btnUploadAvatar.addEventListener("click", () => el.inputAvatarFile.click());
+el.inputAvatarFile.addEventListener("change", async () => {
+  const file = el.inputAvatarFile.files?.[0];
+  el.inputAvatarFile.value = "";
+  if (!file) return;
+  if (!file.type.startsWith("image/")) {
+    alert("Please choose an image file.");
+    return;
+  }
+  try {
+    el.btnUploadAvatar.textContent = "Processing…";
+    el.btnUploadAvatar.disabled = true;
+    const dataUrl = await compressToSquareDataUrl(file, 192, 0.85);
+    el.editPhotoUrl.value = dataUrl;
+    updateProfilePreview();
+  } catch (err) {
+    alert("Could not process image: " + err.message);
+  } finally {
+    el.btnUploadAvatar.textContent = "Upload image…";
+    el.btnUploadAvatar.disabled = false;
+  }
+});
+el.btnClearAvatar.addEventListener("click", () => {
+  el.editPhotoUrl.value = "";
+  updateProfilePreview();
+});
+
+// Crop to square center then shrink to `size`x`size` JPEG as a data URL.
+async function compressToSquareDataUrl(file, size, quality) {
+  const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+  const s = Math.min(bitmap.width, bitmap.height);
+  const sx = (bitmap.width - s) / 2;
+  const sy = (bitmap.height - s) / 2;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(bitmap, sx, sy, s, s, 0, 0, size, size);
+  bitmap.close?.();
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
+el.btnEditProfileCancel.addEventListener("click", () => el.dialogEditProfile.close());
+el.formEditProfile.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const displayName = el.editDisplayName.value.trim();
+  const affiliation = el.editAffiliation.value.trim();
+  const photoURL = el.editPhotoUrl.value.trim() || null;
+  if (!displayName) {
+    el.editProfileError.textContent = "Display name is required.";
+    el.editProfileError.hidden = false;
+    return;
+  }
+  if (photoURL && !/^(https?:\/\/|data:image\/)/i.test(photoURL)) {
+    el.editProfileError.textContent = "URL must start with http://, https://, or be an uploaded image.";
+    el.editProfileError.hidden = false;
+    return;
+  }
+  try {
+    await updateDoc(doc(db, "users", state.user.uid), {
+      displayName, affiliation, photoURL,
+      lastSeenAt: serverTimestamp(),
+    });
+    state.userDoc = { ...state.userDoc, displayName, affiliation, photoURL };
+    renderUserMenu();
+    el.dialogEditProfile.close();
+  } catch (err) {
+    el.editProfileError.textContent = err.message;
+    el.editProfileError.hidden = false;
+  }
+});
+
+// --- User menu dropdown ---
+
+el.btnUserMenu.addEventListener("click", () => {
+  const expanded = el.btnUserMenu.getAttribute("aria-expanded") === "true";
+  el.btnUserMenu.setAttribute("aria-expanded", !expanded);
+  el.userMenuDropdown.hidden = expanded;
+});
+document.addEventListener("click", (e) => {
+  if (!el.btnUserMenu.contains(e.target) && !el.userMenuDropdown.contains(e.target)) {
+    el.btnUserMenu.setAttribute("aria-expanded", "false");
+    el.userMenuDropdown.hidden = true;
+  }
+});
+
+// ===========================================================================
+// Auth state observer
+// ===========================================================================
+
+onAuthStateChanged(auth, async (user) => {
+  state.user = user;
+  if (!user) {
+    teardownChatSubscriptions();
+    showScreen("signin");
+    return;
+  }
+
+  // Confirm the blocking function ran and granted the claim.
+  // In Phase 0 (Spark, no Functions), this check is skipped — any authenticated
+  // user can proceed. The allowlist is enforced again in Phase A.
+  if (!PHASE_0) {
+    const token = await user.getIdTokenResult(true);
+    if (!token.claims.brsMember) {
+      await signOut(auth);
+      showSigninError("Your account is not on the BRS participant list.");
+      return;
+    }
+  }
+
+  // Load or create profile.
+  const userRef = doc(db, "users", user.uid);
+  const snap = await getDoc(userRef);
+  if (!snap.exists() || !snap.data().displayName) {
+    showScreen("profile");
+    el.inputDisplayName.value = user.displayName || "";
+    return;
+  }
+  state.userDoc = snap.data();
+  state.lastReadByChannel = state.userDoc.lastReadByChannel || {};
+  // Keep photoURL in sync with current Google profile (it may change).
+  if (user.photoURL && state.userDoc.photoURL !== user.photoURL) {
+    updateDoc(userRef, { photoURL: user.photoURL }).catch((e) =>
+      console.warn("photoURL sync failed", e));
+    state.userDoc.photoURL = user.photoURL;
+  }
+  renderUserMenu();
+
+  showScreen("chat");
+  initChat();
+  startHeartbeat();
+  handlePermalinkInHash();
+});
+
+el.formProfile.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const displayName = el.inputDisplayName.value.trim();
+  const affiliation = el.inputAffiliation.value.trim();
+  if (!displayName) return;
+  const user = state.user;
+  const userRef = doc(db, "users", user.uid);
+  await setDoc(userRef, {
+    email: user.email,
+    displayName,
+    affiliation,
+    photoURL: user.photoURL || null,
+    lastSeenAt: serverTimestamp(),
+    lastReadByChannel: {},
+  }, { merge: true });
+  state.userDoc = {
+    email: user.email, displayName, affiliation,
+    photoURL: user.photoURL || null, lastReadByChannel: {},
+  };
+  renderUserMenu();
+  showScreen("chat");
+  initChat();
+  startHeartbeat();
+});
+
+function renderUserMenu() {
+  el.userMenuName.innerHTML = "";
+  if (state.userDoc) {
+    const avatar = renderAvatar({
+      uid: state.user.uid,
+      displayName: state.userDoc.displayName,
+      photoURL: state.userDoc.photoURL || state.user.photoURL,
+    });
+    el.userMenuName.appendChild(avatar);
+    const label = document.createElement("span");
+    label.textContent = state.userDoc.displayName;
+    el.userMenuName.appendChild(label);
+  }
+}
+
+// ===========================================================================
+// Chat init
+// ===========================================================================
+
+function initChat() {
+  clearFatal();
+  subscribeUsers();
+  subscribeUserSecrets();
+  subscribeChannels();
+  subscribeCustomReactions();
+  subscribeAdmins();
+  initNotifications();
+}
+
+function teardownChatSubscriptions() {
+  if (state.unsubPublicChannels) { state.unsubPublicChannels(); state.unsubPublicChannels = null; }
+  if (state.unsubPrivateChannels) { state.unsubPrivateChannels(); state.unsubPrivateChannels = null; }
+  if (state.unsubUsers) { state.unsubUsers(); state.unsubUsers = null; }
+  if (state.unsubReactions) { state.unsubReactions(); state.unsubReactions = null; }
+  if (state.unsubMessages) { state.unsubMessages(); state.unsubMessages = null; }
+  if (state.unsubSecrets) { state.unsubSecrets(); state.unsubSecrets = null; }
+  state.userSecrets = null;
+  if (state.unsubAdmins) { state.unsubAdmins(); state.unsubAdmins = null; }
+  state.adminEmails = [];
+  tearDownChannelNotifyListeners();
+  if (state.unsubTyping) { state.unsubTyping(); state.unsubTyping = null; }
+  stopHeartbeat();
+  closeThread();
+  generalJoinAttempted = false;
+}
+
+// --- Custom reactions (user-added stamps, shared) ---
+
+function subscribeCustomReactions() {
+  state.unsubReactions = onSnapshot(doc(db, "config", "reactions"), (snap) => {
+    state.customReactions = (snap.data()?.custom || []).filter(
+      (r) => r && r.key && r.emoji,
+    );
+  }, (err) => {
+    console.warn("custom reactions subscription failed", err);
+  });
+}
+
+function subscribeAdmins() {
+  if (state.unsubAdmins) { state.unsubAdmins(); state.unsubAdmins = null; }
+  state.unsubAdmins = onSnapshot(doc(db, "config", "admins"), (snap) => {
+    const emails = (snap.data()?.emails || []).map((e) => (e || "").toLowerCase()).filter(Boolean);
+    state.adminEmails = emails;
+    // Toggle visibility of admin menu entry.
+    if (el.btnAdminPanel) el.btnAdminPanel.hidden = !isAdmin();
+    if (el.dialogMembers?.open) renderMembersDialog();
+    if (el.dialogAdmin?.open) renderAdminDialog();
+  }, (err) => {
+    console.warn("admins subscription failed", err);
+  });
+}
+
+// --- Users subscription (for member pickers + DM discovery) ---
+
+function subscribeUsers() {
+  state.unsubUsers = onSnapshot(collection(db, "users"), (snap) => {
+    state.allUsers = snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
+  }, (err) => {
+    console.warn("users subscription failed", err);
+  });
+}
+
+// --- Channels subscription ---
+// We need two queries: (1) all public channels, (2) private channels where
+// the current user is a member. Merge client-side. Firestore can't OR these
+// in one query on Spark/Native mode without composite indexes.
+
+function subscribeChannels() {
+  // You only see channels you're a MEMBER of (public, team, or DM).
+  // This means removing someone actually hides the channel for them.
+  // #general auto-adds every signed-in user, so it's visible to everyone.
+  // To discover public channels you're not in, use the Browse dialog.
+  const q = query(
+    collection(db, "channels"),
+    where("members", "array-contains", state.user.uid),
+  );
+  state.unsubPrivateChannels = onSnapshot(q, (snap) => {
+    state.channels = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => {
+        const am = a.createdAt?.toMillis?.() ?? 0;
+        const bm = b.createdAt?.toMillis?.() ?? 0;
+        return am - bm;
+      });
+    renderChannelLists();
+    refreshChannelNotifyListeners();
+    const cur = state.channels.find((c) => c.id === state.currentChannelId);
+    if (cur) el.memberCount.textContent = (cur.members || []).length || "";
+    if (el.dialogMembers.open) renderMembersDialog();
+    if (el.dialogBrowseChannels?.open) renderBrowseChannels();
+    ensureJoinedGeneral();
+    // If user was removed from the currently viewed channel, fall back.
+    if (state.currentChannelId && !state.channels.find((c) => c.id === state.currentChannelId)) {
+      const fallback = state.channels.find((c) => (c.name || "").toLowerCase() === GENERAL_CHANNEL_NAME)
+        || state.channels[0];
+      if (fallback) selectChannel(fallback.id);
+      else {
+        state.currentChannelId = null;
+        el.messagesList.innerHTML = "";
+        el.currentChannelName.textContent = "(no channels)";
+      }
+    }
+    if (!state.currentChannelId && state.channels.length > 0) {
+      const first = state.channels.find((c) => (c.name || "").toLowerCase() === GENERAL_CHANNEL_NAME)
+        || state.channels[0];
+      selectChannel(first.id);
+    }
+  }, (err) => {
+    console.error("channels subscription failed", err);
+    showFatal("Failed to load channels: " + err.message);
+  });
+}
+
+function renderChannelLists() {
+  const pub = [];
+  const teams = [];
+  const dms = [];
+  for (const ch of state.channels) {
+    if (ch.archived) continue;
+    if (ch.type === "dm") dms.push(ch);
+    else if (ch.type === "team") teams.push(ch);
+    else pub.push(ch);
+  }
+  renderChannelSection(el.channelList, pub, "public");
+  renderChannelSection(el.teamList, teams, "team");
+  renderChannelSection(el.dmList, dms, "dm");
+}
+
+function renderChannelSection(container, channels, kind) {
+  container.innerHTML = "";
+  for (const ch of channels) {
+    const li = document.createElement("li");
+    li.dataset.channelId = ch.id;
+    if (ch.id === state.currentChannelId) li.classList.add("active");
+
+    let label = ch.name;
+    let prefix = "#";
+    let lock = "";
+    let dmUser = null;
+    if (kind === "dm") {
+      dmUser = getDmOtherUser(ch);
+      label = dmUser ? (dmUser.displayName || dmUser.email || "(unknown)") : "(dm)";
+      prefix = "";
+    } else if (kind === "team") {
+      lock = `<span class="lock-icon" aria-label="private">🔒</span>`;
+    }
+
+    if (prefix) {
+      const hash = document.createElement("span");
+      hash.className = "channel-hash";
+      hash.textContent = prefix;
+      li.appendChild(hash);
+    } else if (dmUser) {
+      li.appendChild(renderAvatar(dmUser, "xs"));
+    }
+    const nameWrap = document.createElement("span");
+    nameWrap.className = "dm-name";
+    const nameEl = document.createElement("span");
+    nameEl.className = "channel-name";
+    nameEl.textContent = label;
+    nameWrap.appendChild(nameEl);
+    if (lock) nameWrap.insertAdjacentHTML("beforeend", lock);
+    li.appendChild(nameWrap);
+    const badge = document.createElement("span");
+    badge.className = "unread-badge";
+    badge.hidden = true;
+    badge.setAttribute("aria-label", "unread");
+    li.appendChild(badge);
+
+    const lastReadTs = state.lastReadByChannel[ch.id];
+    const lastMsgTs = state.channelLastMsgTs[ch.id];
+    const unread = lastMsgTs && (!lastReadTs || tsGt(lastMsgTs, lastReadTs)) && ch.id !== state.currentChannelId;
+    if (unread) li.querySelector(".unread-badge").hidden = false;
+
+    // Mention pill (higher priority than generic unread dot)
+    const mentionCount = state.unreadMentionsByChannel.get(ch.id) || 0;
+    if (mentionCount > 0 && ch.id !== state.currentChannelId) {
+      const pill = document.createElement("span");
+      pill.className = "mention-pill-count";
+      pill.textContent = mentionCount > 9 ? "9+" : mentionCount;
+      li.appendChild(pill);
+      // hide the plain unread-badge since the pill is more informative
+      li.querySelector(".unread-badge").hidden = true;
+    }
+
+    li.addEventListener("click", () => selectChannel(ch.id));
+    container.appendChild(li);
+  }
+}
+
+function getDmOtherUser(ch) {
+  const otherUid = (ch.members || []).find((u) => u !== state.user.uid);
+  return state.allUsers.find((u) => u.uid === otherUid);
+}
+
+function tsGt(a, b) {
+  const am = a?.toMillis ? a.toMillis() : (a?.seconds ? a.seconds * 1000 : 0);
+  const bm = b?.toMillis ? b.toMillis() : (b?.seconds ? b.seconds * 1000 : 0);
+  return am > bm;
+}
+
+// --- Channel selection ---
+
+function selectChannel(channelId) {
+  if (state.unsubMessages) { state.unsubMessages(); state.unsubMessages = null; }
+  state.currentChannelId = channelId;
+  const ch = state.channels.find((c) => c.id === channelId);
+  if (!ch) return;
+  let titleText = ch.name;
+  let titlePrefix = "#";
+  if (ch.type === "dm") {
+    const other = getDmOtherUser(ch);
+    titleText = other ? (other.displayName || other.email || "(unknown)") : "(dm)";
+    titlePrefix = "@";
+  }
+  el.currentChannelName.textContent = titleText;
+  const titleHash = document.querySelector(".chat-title .channel-hash");
+  if (titleHash) titleHash.textContent = titlePrefix;
+  el.inputMessage.placeholder = `Message ${titlePrefix}${titleText} · Ctrl+Enter to send`;
+  // Show member count + hide button for DMs (always 2 people, not useful)
+  el.btnMembers.hidden = ch.type === "dm";
+  el.memberCount.textContent = (ch.members || []).length || "";
+  renderChannelLists();
+  el.messagesList.innerHTML = "";
+  el.messagesLoading.hidden = false;
+  el.messagesEmpty.hidden = true;
+
+  // Close mobile sidebar after selection.
+  el.chatSidebar.classList.remove("open");
+
+  subscribeMessages(channelId);
+  subscribeTypingForCurrent();
+  el.typingIndicator.hidden = true;
+  markChannelRead(channelId);
+}
+
+function subscribeMessages(channelId) {
+  const q = query(
+    collection(db, "channels", channelId, "messages"),
+    orderBy("createdAt", "desc"),
+    limit(200),
+  );
+  state.unsubMessages = onSnapshot(q, (snap) => {
+    el.messagesLoading.hidden = true;
+    // Exclude thread replies from the main list.
+    const docs = snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((m) => !m.parentId)
+      .reverse();
+    state.currentMessages = docs;
+    el.messagesEmpty.hidden = docs.length > 0;
+    renderMessages(docs, channelId);
+    renderPinnedBar(docs, channelId);
+    if (docs.length > 0) {
+      state.channelLastMsgTs[channelId] = docs[docs.length - 1].createdAt;
+      if (channelId === state.currentChannelId) markChannelRead(channelId);
+    }
+    renderChannelLists();
+    // If a permalink is queued for this channel, scroll to it.
+    if (state.pendingScrollToMsg) {
+      const targetId = state.pendingScrollToMsg;
+      state.pendingScrollToMsg = null;
+      requestAnimationFrame(() => scrollToMessage(targetId));
+    }
+  }, (err) => {
+    console.error(err);
+    showFatal("Failed to load messages: " + err.message);
+  });
+}
+
+function renderMessages(docs, channelId) {
+  const wasAtBottom = isScrolledToBottom(el.messagesContainer);
+  el.messagesList.innerHTML = "";
+  const q = (state.searchQuery || "").trim().toLowerCase();
+  let matches = 0;
+  for (const m of docs) {
+    if (q) {
+      const hay = ((m.text || "") + " " + (m.authorName || "")).toLowerCase();
+      if (!hay.includes(q)) continue;
+      matches++;
+    }
+    el.messagesList.appendChild(renderMessage(m, channelId));
+  }
+  if (q) {
+    el.searchCount.textContent = matches + " match" + (matches === 1 ? "" : "es");
+  }
+  if (wasAtBottom && !q) scrollToBottom(el.messagesContainer);
+}
+
+function scrollToMessage(msgId) {
+  const li = el.messagesList.querySelector(`[data-message-id="${msgId}"]`);
+  if (!li) return;
+  li.scrollIntoView({ behavior: "smooth", block: "center" });
+  li.classList.add("highlight");
+  setTimeout(() => li.classList.remove("highlight"), 2000);
+}
+
+function isScrolledToBottom(container) {
+  return container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+}
+function scrollToBottom(container) {
+  container.scrollTop = container.scrollHeight;
+}
+
+function renderMessage(m, channelId) {
+  const li = document.createElement("li");
+  li.className = "message";
+  li.dataset.messageId = m.id;
+  const isOwn = m.authorUid === state.user.uid;
+  const isAdmin = !!state.user && !!state.userDoc &&
+    !!(auth.currentUser && auth.currentUser.getIdTokenResult);  // claim checked in rules
+  if (isOwn) li.classList.add("own");
+  if (m.deleted) li.classList.add("deleted");
+
+  // Avatar: look up the author's current photoURL from the users cache,
+  // falling back to the photoURL denormalized onto the message.
+  const authorUser = getUserByUid(m.authorUid) || {
+    uid: m.authorUid, displayName: m.authorName,
+    photoURL: m.authorPhotoURL, email: m.authorEmail,
+  };
+  li.appendChild(renderAvatar(authorUser));
+
+  const body = document.createElement("div");
+  body.className = "message-body";
+  li.appendChild(body);
+
+  const meta = document.createElement("div");
+  meta.className = "message-meta";
+  meta.innerHTML =
+    `<span class="message-author"></span>` +
+    `<span class="message-affiliation"></span>` +
+    `<span class="message-time"></span>` +
+    (m.editedAt ? `<span class="message-edited">(edited)</span>` : "");
+  meta.querySelector(".message-author").textContent = m.authorName || "unknown";
+  if (m.authorAffiliation) meta.querySelector(".message-affiliation").textContent = m.authorAffiliation;
+  meta.querySelector(".message-time").textContent = formatTime(m.createdAt);
+  // Email is intentionally hidden in chat rows; it's still visible in Members.
+  if (m.authorEmail) meta.title = m.authorEmail;
+  body.appendChild(meta);
+
+  if (m.deleted) {
+    const stub = document.createElement("div");
+    stub.textContent = "(deleted)";
+    body.appendChild(stub);
+    return li;
+  }
+
+  // Poll message?
+  if (m.type === "poll" && m.poll) {
+    body.appendChild(renderPollCard(channelId, m));
+  } else if (m.text) {
+    const text = document.createElement("div");
+    text.className = "message-text";
+    const { html, ytId } = renderMessageBody(m.text);
+    text.innerHTML = html;
+    body.appendChild(text);
+    if (ytId) {
+      const wrap = document.createElement("div");
+      wrap.className = "yt-embed";
+      const f = document.createElement("iframe");
+      f.src = `https://www.youtube.com/embed/${ytId}`;
+      f.loading = "lazy";
+      f.allow = "accelerometer; encrypted-media; gyroscope; picture-in-picture";
+      f.allowFullscreen = true;
+      wrap.appendChild(f);
+      body.appendChild(wrap);
+    }
+  }
+  if (m.image && m.image.thumbUrl) {
+    const img = document.createElement("img");
+    img.className = "message-image";
+    img.loading = "lazy";
+    img.src = m.image.thumbUrl;
+    img.alt = "attached image";
+    img.addEventListener("click", () => openLightbox(m.image.url));
+    body.appendChild(img);
+  }
+
+  // Replies summary
+  if ((m.replyCount || 0) > 0) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "replies-summary";
+    btn.textContent = `🧵 ${m.replyCount} ${m.replyCount === 1 ? "reply" : "replies"}`;
+    btn.addEventListener("click", () => openThread(channelId, m.id));
+    body.appendChild(btn);
+  }
+
+  // Reactions
+  const reactions = m.reactions || {};
+  const reactionKeys = Object.keys(reactions).filter((e) => (reactions[e] || []).length > 0);
+  if (reactionKeys.length > 0) {
+    const wrap = document.createElement("div");
+    wrap.className = "reactions";
+    for (const key of reactionKeys) {
+      const uids = reactions[key] || [];
+      const meta = findReactionMeta(key);
+      const pill = document.createElement("button");
+      pill.type = "button";
+      pill.className = "reaction-pill" + (uids.includes(state.user.uid) ? " mine" : "");
+      if (meta.emoji) {
+        pill.classList.add("reaction-badge");
+        pill.style.setProperty("--badge-color", meta.color);
+        pill.innerHTML =
+          `<span class="reaction-emoji"></span>` +
+          `<span class="reaction-label"></span>` +
+          `<span class="reaction-count"></span>`;
+        pill.querySelector(".reaction-emoji").textContent = meta.emoji;
+        pill.querySelector(".reaction-label").textContent = meta.key;
+      } else {
+        pill.innerHTML = `<span>${key}</span><span class="reaction-count"></span>`;
+      }
+      pill.querySelector(".reaction-count").textContent = uids.length;
+      pill.title = uids.map((u) => getUserByUid(u)?.displayName || "?").join(", ");
+      pill.addEventListener("click", () => toggleReaction(channelId, m.id, key, uids));
+      wrap.appendChild(pill);
+    }
+    body.appendChild(wrap);
+  }
+
+  // Actions: react / reply / pin / save / copy-link / edit / delete.
+  const actions = document.createElement("div");
+  actions.className = "message-actions";
+
+  const reactBtn = document.createElement("button");
+  reactBtn.type = "button";
+  reactBtn.textContent = "😊+";
+  reactBtn.title = "Add reaction";
+  reactBtn.addEventListener("click", (e) => openEmojiPicker(e.currentTarget, channelId, m));
+  actions.appendChild(reactBtn);
+
+  // Reply (thread) — not available inside thread panel itself
+  if (m.parentId == null) {
+    const replyBtn = document.createElement("button");
+    replyBtn.type = "button";
+    replyBtn.textContent = "💬";
+    replyBtn.title = "Reply in thread";
+    replyBtn.addEventListener("click", () => openThread(channelId, m.id));
+    actions.appendChild(replyBtn);
+  }
+
+  // Pin / Unpin
+  const pinBtn = document.createElement("button");
+  pinBtn.type = "button";
+  pinBtn.textContent = m.pinned ? "📌✓" : "📌";
+  pinBtn.title = m.pinned ? "Unpin" : "Pin to channel";
+  pinBtn.addEventListener("click", () => togglePin(channelId, m));
+  actions.appendChild(pinBtn);
+
+  // Save / Unsave
+  const isSaved = !!(state.userDoc?.savedMessages || []).find(
+    (s) => s.channelId === channelId && s.messageId === m.id,
+  );
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.textContent = isSaved ? "🔖✓" : "🔖";
+  saveBtn.title = isSaved ? "Unsave" : "Save for later";
+  saveBtn.addEventListener("click", () => toggleSave(channelId, m));
+  actions.appendChild(saveBtn);
+
+  // Copy permalink
+  const linkBtn = document.createElement("button");
+  linkBtn.type = "button";
+  linkBtn.textContent = "🔗";
+  linkBtn.title = "Copy link to message";
+  linkBtn.addEventListener("click", () => copyPermalink(channelId, m.id));
+  actions.appendChild(linkBtn);
+
+  const now = Date.now();
+  const createdMs = m.createdAt?.toMillis?.() ?? 0;
+  if (isOwn && m.text && (now - createdMs) < 5 * 60 * 1000) {
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.textContent = "Edit";
+    editBtn.addEventListener("click", () => editMessage(channelId, m));
+    actions.appendChild(editBtn);
+  }
+  if (isOwn) {
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.textContent = "Delete";
+    delBtn.addEventListener("click", () => deleteMessage(channelId, m.id));
+    actions.appendChild(delBtn);
+  }
+  body.appendChild(actions);
+
+  return li;
+}
+
+// ---- Reactions (emoji + text badges) ----
+// Each reaction is stored in Firestore as a key in messages/{mid}.reactions.
+// Pure-emoji keys render as plain emoji pills; text badges render as colored
+// pills with an emoji prefix, defined here.
+const QUICK_REACTIONS = [
+  { key: "👍" },
+  { key: "❤️" },
+  { key: "😂" },
+  { key: "🎉" },
+  { key: "🔥" },
+  { key: "👀" },
+  { key: "🙏" },
+  { key: "🤔" },
+  { key: "Yes" },
+  { key: "No" },
+  { key: "Thanks!", emoji: "🙏", color: "#27ae60" },
+  { key: "Great!",  emoji: "✨", color: "#e67e22" },
+  { key: "LGTM",    emoji: "✅", color: "#2980b9" },
+  { key: "Nice!",   emoji: "👌", color: "#8e44ad" },
+  { key: "Agree",   emoji: "🤝", color: "#16a085" },
+  { key: "Wow!",    emoji: "🚀", color: "#c0392b" },
+  { key: "I'm in!", emoji: "🙋", color: "#2980b9" },
+];
+function findReactionMeta(key) {
+  return state.customReactions.find((r) => r.key === key)
+    || QUICK_REACTIONS.find((r) => r.key === key)
+    || { key };
+}
+function allReactions() {
+  // Dedupe by key; custom reactions can override defaults if keys collide.
+  const seen = new Set();
+  const out = [];
+  for (const r of [...QUICK_REACTIONS, ...state.customReactions]) {
+    if (!seen.has(r.key)) { seen.add(r.key); out.push(r); }
+  }
+  return out;
+}
+let currentEmojiPicker = null;
+
+function openEmojiPicker(anchorBtn, channelId, m) {
+  closeEmojiPicker();
+  const picker = document.createElement("div");
+  picker.className = "emoji-picker";
+  for (const r of allReactions()) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    if (r.emoji && r.key !== r.emoji) {
+      // Text badge style.
+      btn.className = "badge-swatch";
+      btn.style.background = r.color || "#667eea";
+      btn.textContent = `${r.emoji} ${r.key}`;
+    } else {
+      btn.textContent = r.key;
+    }
+    btn.addEventListener("click", () => {
+      const existing = (m.reactions && m.reactions[r.key]) || [];
+      toggleReaction(channelId, m.id, r.key, existing);
+      closeEmojiPicker();
+    });
+    picker.appendChild(btn);
+  }
+  // "+" button to add a new custom stamp.
+  const addBtn = document.createElement("button");
+  addBtn.type = "button";
+  addBtn.className = "add-stamp";
+  addBtn.textContent = "＋ Add stamp";
+  addBtn.addEventListener("click", () => {
+    closeEmojiPicker();
+    openAddReactionDialog();
+  });
+  picker.appendChild(addBtn);
+  // Position inside the actions container so it floats below.
+  const actionsEl = anchorBtn.closest(".message-actions");
+  actionsEl.style.position = "relative";
+  actionsEl.appendChild(picker);
+  currentEmojiPicker = picker;
+
+  setTimeout(() => {
+    document.addEventListener("click", onDocClickClose, { once: true });
+  }, 0);
+}
+function onDocClickClose(e) {
+  if (currentEmojiPicker && !currentEmojiPicker.contains(e.target)) {
+    closeEmojiPicker();
+  }
+}
+function closeEmojiPicker() {
+  if (currentEmojiPicker) { currentEmojiPicker.remove(); currentEmojiPicker = null; }
+}
+
+function openAddReactionDialog() {
+  el.inputReactionEmoji.value = "";
+  el.inputReactionLabel.value = "";
+  el.inputReactionColor.value = "#667eea";
+  el.newReactionError.hidden = true;
+  el.dialogNewReaction.showModal();
+}
+el.btnNewReactionCancel?.addEventListener("click", () => el.dialogNewReaction.close());
+el.formNewReaction?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const emoji = el.inputReactionEmoji.value.trim();
+  const key = el.inputReactionLabel.value.trim();
+  const color = el.inputReactionColor.value;
+  if (!emoji) {
+    el.newReactionError.textContent = "Please enter an emoji (e.g. 🎉).";
+    el.newReactionError.hidden = false;
+    return;
+  }
+  // If no label, the emoji itself is the key — renders as a plain emoji pill.
+  const finalKey = key || emoji;
+  if (allReactions().some((r) => r.key === finalKey)) {
+    el.newReactionError.textContent = key
+      ? "A stamp with that label already exists."
+      : "That emoji is already a stamp.";
+    el.newReactionError.hidden = false;
+    return;
+  }
+  try {
+    const newStamp = key
+      ? { key: finalKey, emoji, color, addedBy: state.user.uid }
+      : { key: finalKey, addedBy: state.user.uid };
+    await setDoc(doc(db, "config", "reactions"), {
+      custom: [...state.customReactions, newStamp],
+    }, { merge: true });
+    el.dialogNewReaction.close();
+  } catch (err) {
+    el.newReactionError.textContent = err.message;
+    el.newReactionError.hidden = false;
+  }
+});
+
+async function toggleReaction(channelId, messageId, emoji, currentUids) {
+  const myUid = state.user.uid;
+  const has = currentUids.includes(myUid);
+  const ref = doc(db, "channels", channelId, "messages", messageId);
+  try {
+    await updateDoc(ref, {
+      [`reactions.${emoji}`]: has ? arrayRemove(myUid) : arrayUnion(myUid),
+    });
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+async function editMessage(channelId, m) {
+  const newText = window.prompt("Edit message:", m.text);
+  if (newText === null || newText.trim() === m.text.trim()) return;
+  try {
+    await updateDoc(doc(db, "channels", channelId, "messages", m.id), {
+      text: newText.trim(),
+      editedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    alert("Edit failed: " + err.message);
+  }
+}
+
+async function deleteMessage(channelId, messageId) {
+  if (!window.confirm("Delete this message?")) return;
+  try {
+    await deleteDoc(doc(db, "channels", channelId, "messages", messageId));
+  } catch (err) {
+    alert("Delete failed: " + err.message);
+  }
+}
+
+// --- Mark channel read ---
+
+let markReadTimer = null;
+function markChannelRead(channelId) {
+  clearTimeout(markReadTimer);
+  markReadTimer = setTimeout(async () => {
+    state.lastReadByChannel[channelId] = Timestamp.now();
+    state.unreadMentionsByChannel.set(channelId, 0);
+    updateTabTitleAndMentionBadge();
+    try {
+      await updateDoc(doc(db, "users", state.user.uid), {
+        [`lastReadByChannel.${channelId}`]: serverTimestamp(),
+        lastSeenAt: serverTimestamp(),
+      });
+    } catch (err) {
+      console.warn("markRead failed", err);
+    }
+    renderChannelLists();
+  }, 500);
+}
+
+// ===========================================================================
+// Compose / send
+// ===========================================================================
+
+// ---- Mention autocomplete (supports multiple textareas) ----
+
+let mentionState = {
+  active: false, atPos: -1, cursorPos: -1, candidates: [], selected: 0, textarea: null,
+};
+
+// Enter=newline, Shift+Enter=send (user preference; plays nicer with Japanese IME).
+function handleComposerKeydown(e, textarea, submitFn) {
+  if (mentionState.active && mentionState.textarea === textarea && !el.mentionDropdown.hidden) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      mentionState.selected = (mentionState.selected + 1) % mentionState.candidates.length;
+      renderMentionDropdown();
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      mentionState.selected = (mentionState.selected - 1 + mentionState.candidates.length) % mentionState.candidates.length;
+      renderMentionDropdown();
+      return;
+    }
+    if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      insertMention(mentionState.candidates[mentionState.selected]);
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeMentionAutocomplete();
+      return;
+    }
+  }
+  // Ctrl/Cmd+Enter sends, plain Enter inserts a newline.
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+    e.preventDefault();
+    submitFn();
+  }
+}
+
+el.inputMessage.addEventListener("input", () => {
+  autoResizeTextarea(el.inputMessage);
+  updateMentionAutocomplete(el.inputMessage);
+  onComposeTyping();
+});
+el.inputMessage.addEventListener("keydown", (e) =>
+  handleComposerKeydown(e, el.inputMessage, () => el.formCompose.requestSubmit()));
+el.inputMessage.addEventListener("blur", () => setTimeout(closeMentionAutocomplete, 150));
+
+// Same wiring for thread reply composer.
+el.inputThreadMessage.addEventListener("input", () => {
+  autoResizeTextarea(el.inputThreadMessage);
+  updateMentionAutocomplete(el.inputThreadMessage);
+});
+el.inputThreadMessage.addEventListener("keydown", (e) =>
+  handleComposerKeydown(e, el.inputThreadMessage, () => el.formThreadCompose.requestSubmit()));
+el.inputThreadMessage.addEventListener("blur", () => setTimeout(closeMentionAutocomplete, 150));
+
+function updateMentionAutocomplete(textarea) {
+  textarea = textarea || el.inputMessage;
+  const t = textarea.value;
+  const cursor = textarea.selectionStart;
+  let atPos = -1;
+  for (let i = cursor - 1; i >= 0; i--) {
+    const c = t[i];
+    if (c === "@") {
+      if (i === 0 || /\s/.test(t[i - 1])) { atPos = i; }
+      break;
+    }
+    if (/\s/.test(c)) break;
+  }
+  if (atPos < 0) return closeMentionAutocomplete();
+  const query = t.slice(atPos + 1, cursor);
+  if (!/^[a-zA-Z0-9_\-]*$/.test(query)) return closeMentionAutocomplete();
+
+  const lower = query.toLowerCase();
+  const userRows = state.allUsers
+    .filter((u) => u.uid !== state.user.uid && u.displayName)
+    .filter((u) => {
+      const slug = mentionSlug(u.displayName);
+      return slug.startsWith(lower) || (u.displayName || "").toLowerCase().includes(lower);
+    })
+    .slice(0, 8)
+    .map((u) => ({
+      user: u,
+      token: "@" + mentionSlug(u.displayName),
+      label: u.displayName,
+      sub: [u.affiliation, u.email].filter(Boolean).join(" · "),
+    }));
+  const broadcasts = [
+    { broadcast: true, key: "channel", label: "Notify everyone in this channel", token: "@channel" },
+  ].filter((b) => b.key.startsWith(lower));
+
+  const candidates = [...userRows, ...broadcasts];
+  if (candidates.length === 0) return closeMentionAutocomplete();
+
+  mentionState = { active: true, atPos, cursorPos: cursor, candidates, selected: 0, textarea };
+  renderMentionDropdown();
+  positionMentionDropdown(textarea);
+}
+
+function positionMentionDropdown(textarea) {
+  const r = textarea.getBoundingClientRect();
+  el.mentionDropdown.style.position = "fixed";
+  el.mentionDropdown.style.left = r.left + "px";
+  el.mentionDropdown.style.bottom = (window.innerHeight - r.top + 4) + "px";
+  el.mentionDropdown.style.right = "auto";
+  el.mentionDropdown.style.width = Math.min(r.width, 360) + "px";
+}
+
+function renderMentionDropdown() {
+  el.mentionDropdown.innerHTML = "";
+  mentionState.candidates.forEach((c, i) => {
+    const row = document.createElement("div");
+    row.className = "mention-row"
+      + (i === mentionState.selected ? " active" : "")
+      + (c.broadcast ? " broadcast" : "");
+    row.setAttribute("role", "option");
+    row.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      insertMention(c);
+    });
+    if (c.user) row.appendChild(renderAvatar(c.user, "xs"));
+    const info = document.createElement("span");
+    info.innerHTML = `<strong></strong><span class="mention-handle"></span>`;
+    info.querySelector("strong").textContent = c.label;
+    info.querySelector(".mention-handle").textContent =
+      " " + c.token + (c.sub ? " · " + c.sub : "");
+    row.appendChild(info);
+    el.mentionDropdown.appendChild(row);
+  });
+  el.mentionDropdown.hidden = false;
+}
+
+function closeMentionAutocomplete() {
+  mentionState.active = false;
+  el.mentionDropdown.hidden = true;
+}
+
+function insertMention(c) {
+  const textarea = mentionState.textarea || el.inputMessage;
+  const t = textarea.value;
+  const before = t.slice(0, mentionState.atPos);
+  const after = t.slice(mentionState.cursorPos);
+  const inserted = c.token + " ";
+  textarea.value = before + inserted + after;
+  const pos = before.length + inserted.length;
+  textarea.setSelectionRange(pos, pos);
+  textarea.focus();
+  autoResizeTextarea(textarea);
+  closeMentionAutocomplete();
+}
+
+el.formCompose.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = el.inputMessage.value.trim();
+  if (!text && !state.pendingAttachment) return;
+  if (!state.currentChannelId) return;
+
+  const channelId = state.currentChannelId;
+  const { mentionUids, mentionsEveryone } = parseMentions(text);
+  const msg = {
+    text: text || "",
+    image: null,
+    authorUid: state.user.uid,
+    authorEmail: state.user.email,
+    authorName: state.userDoc.displayName,
+    authorAffiliation: state.userDoc.affiliation || "",
+    mentions: mentionUids,
+    mentionsEveryone,
+    createdAt: serverTimestamp(),
+    editedAt: null,
+    deleted: false,
+    backedUpAt: null,
+  };
+
+  el.inputMessage.value = "";
+  autoResizeTextarea(el.inputMessage);
+  clearOwnTyping();
+
+  try {
+    if (state.pendingAttachment) {
+      el.uploadStatus.textContent = "Uploading image…";
+      msg.image = await uploadImage(state.pendingAttachment, channelId);
+      clearAttachment();
+      el.uploadStatus.textContent = "";
+    }
+    await addDoc(collection(db, "channels", channelId, "messages"), msg);
+  } catch (err) {
+    console.error(err);
+    el.uploadStatus.textContent = "";
+    alert("Send failed: " + err.message);
+    // Restore text so user doesn't lose their input.
+    if (text) el.inputMessage.value = text;
+  }
+});
+
+// ===========================================================================
+// Image attach / upload
+// ===========================================================================
+
+el.btnAttach.addEventListener("click", () => el.inputFile.click());
+el.inputFile.addEventListener("change", async () => {
+  const file = el.inputFile.files?.[0];
+  el.inputFile.value = "";
+  if (!file) return;
+  await attachFile(file);
+});
+
+// Drag & drop.
+el.messagesContainer.addEventListener("dragover", (e) => {
+  if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); }
+});
+el.messagesContainer.addEventListener("drop", async (e) => {
+  e.preventDefault();
+  const file = e.dataTransfer.files?.[0];
+  if (file) await attachFile(file);
+});
+
+el.btnAttachmentRemove.addEventListener("click", clearAttachment);
+
+async function attachFile(file) {
+  clearFatal();
+  if (!file.type.startsWith("image/")) {
+    alert("Only image files are supported.");
+    return;
+  }
+  const isHeic = /hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name);
+  let blob = file;
+  let width = 0, height = 0;
+
+  if (!isHeic) {
+    // Client-side compression via canvas for JPEG/PNG/WebP.
+    try {
+      const res = await compressImage(file, 1600, 0.82);
+      blob = res.blob;
+      width = res.width;
+      height = res.height;
+    } catch (err) {
+      console.warn("compression failed, uploading original", err);
+    }
+  }
+  // HEIC is sent as-is; Cloudinary's incoming transformation handles conversion.
+
+  if (blob.size > 10 * 1024 * 1024) {
+    alert("Image is too large (max 10MB).");
+    return;
+  }
+
+  state.pendingAttachment = { file, blob, width, height };
+
+  // Preview.
+  const previewUrl = isHeic ? "" : URL.createObjectURL(blob);
+  el.attachmentThumb.src = previewUrl;
+  el.attachmentThumb.style.display = isHeic ? "none" : "";
+  el.attachmentName.textContent = `${file.name} (${formatBytes(blob.size)})`;
+  el.attachmentPreview.hidden = false;
+}
+
+function clearAttachment() {
+  state.pendingAttachment = null;
+  el.attachmentPreview.hidden = true;
+  if (el.attachmentThumb.src) URL.revokeObjectURL(el.attachmentThumb.src);
+  el.attachmentThumb.src = "";
+}
+
+function formatBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+async function compressImage(file, maxEdge, quality) {
+  const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+  let { width, height } = bitmap;
+  const scale = Math.min(1, maxEdge / Math.max(width, height));
+  width = Math.round(width * scale);
+  height = Math.round(height * scale);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(bitmap, 0, 0, width, height);
+  bitmap.close?.();
+  const blob = await new Promise((resolve) =>
+    canvas.toBlob(resolve, "image/jpeg", quality));
+  return { blob, width, height };
+}
+
+async function uploadImage({ blob, file }, channelId) {
+  // 1. Ask Cloud Function for a signed upload payload.
+  const getSig = httpsCallable(functions, "getUploadSignature");
+  const { data } = await getSig({ channelId });
+  const { timestamp, folder, upload_preset, signature, apiKey, cloudName } = data;
+
+  // 2. POST to Cloudinary.
+  const form = new FormData();
+  form.append("file", blob, file.name);
+  form.append("api_key", apiKey);
+  form.append("timestamp", String(timestamp));
+  form.append("signature", signature);
+  form.append("folder", folder);
+  form.append("upload_preset", upload_preset);
+
+  const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`Cloudinary upload failed (${res.status}): ${txt.slice(0, 200)}`);
+  }
+  const result = await res.json();
+
+  // 3. Build thumb URL via transformation.
+  const thumbUrl = result.secure_url.replace(
+    "/image/upload/",
+    "/image/upload/c_fill,w_600,h_600,q_auto,f_auto/",
+  );
+
+  return {
+    publicId: result.public_id,
+    url: result.secure_url,
+    thumbUrl,
+    width: result.width,
+    height: result.height,
+  };
+}
+
+// ===========================================================================
+// Lightbox
+// ===========================================================================
+
+function openLightbox(url) {
+  el.lightboxImg.src = url;
+  el.lightbox.showModal();
+}
+el.btnLightboxClose.addEventListener("click", () => el.lightbox.close());
+el.lightbox.addEventListener("click", (e) => {
+  // Close on backdrop click.
+  if (e.target === el.lightbox) el.lightbox.close();
+});
+el.lightbox.addEventListener("close", () => { el.lightboxImg.src = ""; });
+
+// ===========================================================================
+// New channel dialog
+// ===========================================================================
+
+el.btnNewChannel.addEventListener("click", () => {
+  el.inputChannelName.value = "";
+  el.inputChannelDesc.value = "";
+  el.newChannelError.hidden = true;
+  el.dialogNewChannel.showModal();
+});
+el.btnNewChannelCancel.addEventListener("click", () => el.dialogNewChannel.close());
+el.formNewChannel.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = el.inputChannelName.value.trim().toLowerCase();
+  const description = el.inputChannelDesc.value.trim();
+  if (!/^[a-z0-9][a-z0-9_-]{1,31}$/.test(name)) {
+    el.newChannelError.textContent = "Invalid channel name.";
+    el.newChannelError.hidden = false;
+    return;
+  }
+  if (state.channels.some((c) => c.name === name)) {
+    el.newChannelError.textContent = "A channel with that name already exists.";
+    el.newChannelError.hidden = false;
+    return;
+  }
+  try {
+    const ref = await addDoc(collection(db, "channels"), {
+      name,
+      description,
+      type: "public",
+      members: [state.user.uid],
+      createdByUid: state.user.uid,
+      createdAt: serverTimestamp(),
+      isDefault: false,
+      archived: false,
+    });
+    el.dialogNewChannel.close();
+    selectChannel(ref.id);
+  } catch (err) {
+    el.newChannelError.textContent = err.message;
+    el.newChannelError.hidden = false;
+  }
+});
+
+// ===========================================================================
+// New team (private channel) dialog
+// ===========================================================================
+
+el.btnNewTeam.addEventListener("click", () => {
+  el.inputTeamName.value = "";
+  el.inputTeamDesc.value = "";
+  el.newTeamError.hidden = true;
+  renderMemberPicker(el.teamMemberList, { multi: true });
+  el.dialogNewTeam.showModal();
+});
+el.btnNewTeamCancel.addEventListener("click", () => el.dialogNewTeam.close());
+el.formNewTeam.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = el.inputTeamName.value.trim().toLowerCase();
+  const description = el.inputTeamDesc.value.trim();
+  if (!/^[a-z0-9][a-z0-9_-]{1,31}$/.test(name)) {
+    el.newTeamError.textContent = "Invalid team name.";
+    el.newTeamError.hidden = false;
+    return;
+  }
+  const selected = [...el.teamMemberList.querySelectorAll("input[type=checkbox]:checked")]
+    .map((c) => c.value);
+  const members = [...new Set([state.user.uid, ...selected])];
+  if (members.length < 2) {
+    el.newTeamError.textContent = "Pick at least one other member.";
+    el.newTeamError.hidden = false;
+    return;
+  }
+  try {
+    const ref = await addDoc(collection(db, "channels"), {
+      name,
+      description,
+      type: "team",
+      members,
+      createdByUid: state.user.uid,
+      createdAt: serverTimestamp(),
+      isDefault: false,
+      archived: false,
+    });
+    el.dialogNewTeam.close();
+    selectChannel(ref.id);
+  } catch (err) {
+    el.newTeamError.textContent = err.message;
+    el.newTeamError.hidden = false;
+  }
+});
+
+// ===========================================================================
+// New DM dialog
+// ===========================================================================
+
+el.btnNewDm.addEventListener("click", () => {
+  renderMemberPicker(el.dmMemberList, { multi: false, onPick: async (otherUid) => {
+    el.dialogNewDm.close();
+    await openOrCreateDm(otherUid);
+  }});
+  el.dialogNewDm.showModal();
+});
+el.btnNewDmCancel.addEventListener("click", () => el.dialogNewDm.close());
+
+async function openOrCreateDm(otherUid) {
+  const myUid = state.user.uid;
+  // Deterministic DM id so the same 2 people always share the same DM channel.
+  const dmKey = "dm_" + [myUid, otherUid].sort().join("_");
+  // Does it already exist locally?
+  const existing = state.channels.find((c) => c.id === dmKey);
+  if (existing) { selectChannel(dmKey); return; }
+  // Create with a known id.
+  try {
+    await setDoc(doc(db, "channels", dmKey), {
+      name: "dm",
+      description: "",
+      type: "dm",
+      members: [myUid, otherUid].sort(),
+      createdByUid: myUid,
+      createdAt: serverTimestamp(),
+      isDefault: false,
+      archived: false,
+    });
+    selectChannel(dmKey);
+  } catch (err) {
+    alert("Failed to start DM: " + err.message);
+  }
+}
+
+// Render a list of users with checkboxes (multi) or click-to-pick (single).
+function renderMemberPicker(container, { multi, onPick }) {
+  container.innerHTML = "";
+  const users = state.allUsers
+    .filter((u) => u.displayName)
+    .sort((a, b) => (a.displayName || "").localeCompare(b.displayName || ""));
+  for (const u of users) {
+    const isSelf = u.uid === state.user.uid;
+    const row = document.createElement("label");
+    row.className = "member-row" + (isSelf ? " self" : "");
+    if (multi) {
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.value = u.uid;
+      if (isSelf) { cb.disabled = true; cb.checked = true; }
+      row.appendChild(cb);
+    }
+    row.appendChild(renderAvatar(u, "sm"));
+    const info = document.createElement("div");
+    info.className = "member-info";
+    const name = document.createElement("span");
+    name.className = "member-name";
+    name.textContent = (u.displayName || u.email || "(unknown)") + (isSelf ? " (you)" : "");
+    const sub = document.createElement("span");
+    sub.className = "member-sub";
+    sub.textContent = [u.affiliation, u.email].filter(Boolean).join(" · ");
+    info.appendChild(name);
+    info.appendChild(sub);
+    row.appendChild(info);
+    if (!multi && !isSelf && onPick) {
+      row.addEventListener("click", () => onPick(u.uid));
+    }
+    container.appendChild(row);
+  }
+  if (users.length === 0) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "No other users yet. Ask someone to sign in first.";
+    container.appendChild(p);
+  }
+}
+
+// ===========================================================================
+// Channel membership + #general auto-join
+// ===========================================================================
+
+const GENERAL_CHANNEL_NAME = "general";
+let generalJoinAttempted = false;
+
+function findGeneralChannel() {
+  return state.channels.find(
+    (c) => (c.name || "").toLowerCase() === GENERAL_CHANNEL_NAME && c.type !== "dm",
+  );
+}
+
+// Independent of the members-filtered channel subscription: query the
+// "general" channel directly and add self to its members. This is how
+// brand-new users get bootstrapped into #general (they can't see it via
+// the subscription because they're not yet a member).
+async function ensureJoinedGeneral() {
+  if (generalJoinAttempted) return;
+  generalJoinAttempted = true;
+  try {
+    const snap = await getDocs(query(
+      collection(db, "channels"),
+      where("name", "==", GENERAL_CHANNEL_NAME),
+    ));
+    const d = snap.docs[0];
+    if (!d) {
+      console.warn("No #general channel found in Firestore — seed one with name='general'.");
+      generalJoinAttempted = false;
+      return;
+    }
+    const members = d.data().members || [];
+    if (!members.includes(state.user.uid)) {
+      await updateDoc(doc(db, "channels", d.id), {
+        members: arrayUnion(state.user.uid),
+      });
+    }
+  } catch (err) {
+    console.warn("failed to auto-join #general", err);
+    generalJoinAttempted = false;  // allow retry next cycle
+  }
+}
+
+el.btnMembers.addEventListener("click", () => {
+  if (!state.currentChannelId) return;
+  renderMembersDialog();
+  el.dialogMembers.showModal();
+});
+el.btnMembersClose.addEventListener("click", () => el.dialogMembers.close());
+
+function renderMembersDialog() {
+  const ch = state.channels.find((c) => c.id === state.currentChannelId);
+  if (!ch) return;
+  const isGeneral = (ch.name || "").toLowerCase() === GENERAL_CHANNEL_NAME;
+  const prefix = ch.type === "team" ? "🔒 " : "#";
+  const admin = isAdmin();
+
+  el.membersTitle.textContent = `Members of ${prefix}${ch.name}`;
+  el.membersHint.textContent = isGeneral
+    ? (admin
+        ? "#general includes everyone automatically. As an admin you can force-remove anyone (banning)."
+        : "#general includes everyone automatically. Only admins can remove members.")
+    : (admin
+        ? "You can add anyone and remove anyone (admin)."
+        : "You can invite anyone. You can only leave yourself — only admins can remove others.");
+
+  const memberUids = new Set(ch.members || []);
+  const memberUsers = state.allUsers.filter((u) => memberUids.has(u.uid));
+  const nonMembers = state.allUsers.filter((u) => !memberUids.has(u.uid));
+
+  // Current members
+  el.membersList.innerHTML = "";
+  if (memberUsers.length === 0) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "Nobody yet.";
+    el.membersList.appendChild(p);
+  }
+  for (const u of memberUsers) {
+    const isSelf = u.uid === state.user.uid;
+    const row = document.createElement("div");
+    row.className = "member-row";
+    row.appendChild(renderAvatar(u, "sm"));
+    const info = document.createElement("div");
+    info.className = "member-info";
+    const name = document.createElement("span");
+    name.className = "member-name";
+    const adminBadge = state.adminEmails.includes((u.email || "").toLowerCase()) ? " 🛡️" : "";
+    name.textContent = u.displayName + (isSelf ? " (you)" : "") + adminBadge;
+    const sub = document.createElement("span");
+    sub.className = "member-sub";
+    sub.textContent = [u.affiliation, u.email].filter(Boolean).join(" · ");
+    info.appendChild(name);
+    info.appendChild(sub);
+    row.appendChild(info);
+
+    // Remove / Leave rules:
+    //  - #general: only admins can force-remove (including self, though self
+    //    will be re-added on next sign-in). Non-admins get no button.
+    //  - Other channels: self can leave; admins can remove anyone.
+    const canAct = isGeneral ? admin : (isSelf || admin);
+    if (canAct) {
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "remove-btn";
+      rm.textContent = isSelf && !isGeneral ? "Leave" : "Remove";
+      rm.title = isGeneral
+        ? "Force-remove from #general (admin)"
+        : (isSelf ? "Leave this channel" : "Remove from channel (admin)");
+      rm.addEventListener("click", () => removeMember(ch.id, u.uid));
+      row.appendChild(rm);
+    }
+    el.membersList.appendChild(row);
+  }
+
+  // Add someone
+  el.addMemberList.innerHTML = "";
+  if (nonMembers.length === 0) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "Everyone is already here.";
+    el.addMemberList.appendChild(p);
+  }
+  for (const u of nonMembers) {
+    const row = document.createElement("div");
+    row.className = "member-row";
+    row.appendChild(renderAvatar(u, "sm"));
+    const info = document.createElement("div");
+    info.className = "member-info";
+    const name = document.createElement("span");
+    name.className = "member-name";
+    name.textContent = u.displayName;
+    const sub = document.createElement("span");
+    sub.className = "member-sub";
+    sub.textContent = [u.affiliation, u.email].filter(Boolean).join(" · ");
+    info.appendChild(name);
+    info.appendChild(sub);
+    row.appendChild(info);
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "add-btn";
+    add.textContent = "Add";
+    add.addEventListener("click", () => addMember(ch.id, u.uid));
+    row.appendChild(add);
+    el.addMemberList.appendChild(row);
+  }
+}
+
+async function addMember(channelId, uid) {
+  try {
+    await updateDoc(doc(db, "channels", channelId), {
+      members: arrayUnion(uid),
+    });
+  } catch (err) {
+    alert("Failed to add: " + err.message);
+  }
+}
+async function removeMember(channelId, uid) {
+  const isSelf = uid === state.user.uid;
+  const msg = isSelf ? "Leave this channel?" : "Remove this member from the channel?";
+  if (!window.confirm(msg)) return;
+  try {
+    await updateDoc(doc(db, "channels", channelId), {
+      members: arrayRemove(uid),
+    });
+  } catch (err) {
+    alert("Failed: " + err.message);
+  }
+}
+
+// ---- Admin panel ----
+
+el.btnAdminPanel?.addEventListener("click", () => {
+  el.userMenuDropdown.hidden = true;
+  el.btnUserMenu.setAttribute("aria-expanded", "false");
+  renderAdminDialog();
+  el.dialogAdmin.showModal();
+});
+el.btnAdminClose?.addEventListener("click", () => el.dialogAdmin.close());
+
+function renderAdminDialog() {
+  el.adminError.hidden = true;
+  el.inputNewAdmin.value = "";
+  el.adminList.innerHTML = "";
+  if (state.adminEmails.length === 0) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "No admins set. Add one below.";
+    el.adminList.appendChild(p);
+    return;
+  }
+  for (const email of state.adminEmails) {
+    const row = document.createElement("div");
+    row.className = "member-row";
+    row.style.padding = "4px 0";
+    const label = document.createElement("span");
+    label.style.flex = "1";
+    label.textContent = email + (email === (state.user.email || "").toLowerCase() ? " (you)" : "");
+    row.appendChild(label);
+    if (isAdmin()) {
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "remove-btn";
+      rm.textContent = "Revoke";
+      rm.addEventListener("click", () => removeAdmin(email));
+      row.appendChild(rm);
+    }
+    el.adminList.appendChild(row);
+  }
+}
+
+el.btnAddAdmin?.addEventListener("click", async () => {
+  el.adminError.hidden = true;
+  const email = (el.inputNewAdmin.value || "").trim().toLowerCase();
+  if (!email || !email.includes("@")) {
+    el.adminError.textContent = "Please enter a valid email.";
+    el.adminError.hidden = false;
+    return;
+  }
+  if (!isAdmin()) {
+    el.adminError.textContent = "Only existing admins can grant admin rights.";
+    el.adminError.hidden = false;
+    return;
+  }
+  try {
+    await setDoc(doc(db, "config", "admins"), {
+      emails: arrayUnion(email),
+    }, { merge: true });
+    el.inputNewAdmin.value = "";
+  } catch (err) {
+    el.adminError.textContent = err.message;
+    el.adminError.hidden = false;
+  }
+});
+
+async function removeAdmin(email) {
+  if (!isAdmin()) return;
+  if (email === (state.user.email || "").toLowerCase() &&
+      !window.confirm("This will revoke YOUR admin rights. Continue?")) return;
+  try {
+    await setDoc(doc(db, "config", "admins"), {
+      emails: arrayRemove(email),
+    }, { merge: true });
+  } catch (err) {
+    el.adminError.textContent = err.message;
+    el.adminError.hidden = false;
+  }
+}
+
+// ===========================================================================
+// Browse public channels
+// ===========================================================================
+
+el.btnBrowseChannels?.addEventListener("click", () => {
+  renderBrowseChannels();
+  el.dialogBrowseChannels.showModal();
+});
+el.btnBrowseChannelsClose?.addEventListener("click", () => el.dialogBrowseChannels.close());
+
+async function renderBrowseChannels() {
+  el.browseChannelsList.innerHTML = "Loading…";
+  try {
+    const snap = await getDocs(query(collection(db, "channels"), where("type", "==", "public")));
+    const mine = new Set(state.channels.map((c) => c.id));
+    const others = snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((c) => !c.archived && !mine.has(c.id));
+    el.browseChannelsList.innerHTML = "";
+    if (others.length === 0) {
+      el.browseChannelsList.innerHTML = `<p class="hint">You're already in every public channel.</p>`;
+      return;
+    }
+    for (const c of others) {
+      const item = document.createElement("div");
+      item.className = "bookmark-item";
+      const info = document.createElement("div");
+      info.className = "bookmark-item-body";
+      const name = document.createElement("div");
+      name.innerHTML = `<strong>#${escHtml(c.name)}</strong>`;
+      const sub = document.createElement("div");
+      sub.className = "bookmark-item-meta";
+      sub.textContent = (c.description || "") +
+        (c.description ? " · " : "") +
+        `${(c.members || []).length} members`;
+      info.appendChild(name);
+      info.appendChild(sub);
+      item.appendChild(info);
+      const joinBtn = document.createElement("button");
+      joinBtn.type = "button";
+      joinBtn.className = "primary-btn";
+      joinBtn.style.width = "auto";
+      joinBtn.style.padding = "6px 14px";
+      joinBtn.textContent = "Join";
+      joinBtn.addEventListener("click", async () => {
+        joinBtn.disabled = true;
+        try {
+          await updateDoc(doc(db, "channels", c.id), {
+            members: arrayUnion(state.user.uid),
+          });
+          el.dialogBrowseChannels.close();
+          // The subscription will pick it up; select it shortly.
+          setTimeout(() => selectChannel(c.id), 200);
+        } catch (err) {
+          alert("Join failed: " + err.message);
+          joinBtn.disabled = false;
+        }
+      });
+      item.appendChild(joinBtn);
+      el.browseChannelsList.appendChild(item);
+    }
+  } catch (err) {
+    el.browseChannelsList.innerHTML = `<p class="error">${escHtml(err.message)}</p>`;
+  }
+}
+
+// ===========================================================================
+// Sidebar toggle (mobile)
+// ===========================================================================
+
+el.btnToggleSidebar.addEventListener("click", () => {
+  el.chatSidebar.classList.toggle("open");
+});
+
+// ===========================================================================
+// Mobile keyboard / visualViewport
+// ===========================================================================
+
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", () => {
+    // Ensure message list stays scrolled to bottom when keyboard opens.
+    if (isScrolledToBottom(el.messagesContainer)) {
+      scrollToBottom(el.messagesContainer);
+    }
+  });
+}
+
+// ===========================================================================
+// #1 Pinned messages
+// ===========================================================================
+
+function renderPinnedBar(docs, channelId) {
+  const pinned = docs.filter((m) => m.pinned && !m.deleted);
+  el.pinnedCount.textContent = pinned.length;
+  el.pinnedBar.hidden = pinned.length === 0;
+  el.pinnedList.innerHTML = "";
+  for (const m of pinned) {
+    const li = document.createElement("li");
+    li.className = "pinned-item";
+    li.appendChild(renderAvatar(getUserByUid(m.authorUid) || { authorName: m.authorName }, "xs"));
+    const text = document.createElement("div");
+    text.className = "pinned-item-text";
+    text.innerHTML =
+      `<span class="pinned-item-author"></span> ` +
+      `<span class="pinned-item-preview"></span>`;
+    text.querySelector(".pinned-item-author").textContent = m.authorName + ":";
+    const preview = (m.text || (m.image ? "[image]" : "[poll]")).slice(0, 120);
+    text.querySelector(".pinned-item-preview").textContent = preview;
+    li.appendChild(text);
+    li.addEventListener("click", () => scrollToMessage(m.id));
+    el.pinnedList.appendChild(li);
+  }
+}
+
+el.btnPinnedToggle.addEventListener("click", () => {
+  const open = !el.pinnedList.hidden;
+  el.pinnedList.hidden = open;
+  el.pinnedBar.classList.toggle("open", !open);
+});
+
+async function togglePin(channelId, m) {
+  try {
+    await updateDoc(doc(db, "channels", channelId, "messages", m.id), {
+      pinned: !m.pinned,
+    });
+  } catch (err) {
+    alert("Pin failed: " + err.message);
+  }
+}
+
+// ===========================================================================
+// #2 Threaded replies
+// ===========================================================================
+
+async function openThread(channelId, parentMsgId) {
+  closeThread();
+  state.threadMsgId = parentMsgId;
+  el.threadPanel.hidden = false;
+  el.threadParent.innerHTML = "Loading…";
+  el.threadReplies.innerHTML = "";
+  // Fetch parent
+  try {
+    const snap = await getDoc(doc(db, "channels", channelId, "messages", parentMsgId));
+    if (!snap.exists()) { el.threadParent.textContent = "(Message not found)"; return; }
+    state.threadParent = { id: snap.id, ...snap.data() };
+    el.threadParent.innerHTML = "";
+    el.threadParent.appendChild(renderMessage(state.threadParent, channelId));
+  } catch (err) {
+    el.threadParent.textContent = "Failed to load: " + err.message;
+    return;
+  }
+  // Subscribe to replies
+  const q = query(
+    collection(db, "channels", channelId, "messages", parentMsgId, "replies"),
+    orderBy("createdAt", "asc"),
+  );
+  state.unsubThreadReplies = onSnapshot(q, (snap) => {
+    el.threadReplies.innerHTML = "";
+    for (const d of snap.docs) {
+      el.threadReplies.appendChild(renderMessage({ id: d.id, ...d.data() }, channelId));
+    }
+    el.threadReplies.scrollTop = el.threadReplies.scrollHeight;
+  });
+}
+function closeThread() {
+  if (state.unsubThreadReplies) { state.unsubThreadReplies(); state.unsubThreadReplies = null; }
+  state.threadMsgId = null;
+  state.threadParent = null;
+  el.threadPanel.hidden = true;
+}
+el.btnThreadClose.addEventListener("click", closeThread);
+
+el.formThreadCompose.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = el.inputThreadMessage.value.trim();
+  if (!text) return;
+  const channelId = state.currentChannelId;
+  const parentId = state.threadMsgId;
+  if (!channelId || !parentId) return;
+  const { mentionUids, mentionsEveryone } = parseMentions(text);
+  el.inputThreadMessage.value = "";
+  try {
+    await addDoc(collection(db, "channels", channelId, "messages", parentId, "replies"), {
+      text,
+      authorUid: state.user.uid,
+      authorEmail: state.user.email,
+      authorName: state.userDoc.displayName,
+      authorAffiliation: state.userDoc.affiliation || "",
+      mentions: mentionUids,
+      mentionsEveryone,
+      createdAt: serverTimestamp(),
+      parentId,
+    });
+    // Update parent with replyCount + a denormalized lastReply so that the
+    // channel-level notify listener picks up thread replies for webhook
+    // forwarding and browser notifications.
+    updateDoc(doc(db, "channels", channelId, "messages", parentId), {
+      replyCount: increment(1),
+      lastReplyAt: serverTimestamp(),
+      lastReply: {
+        text,
+        authorUid: state.user.uid,
+        authorEmail: state.user.email,
+        authorName: state.userDoc.displayName,
+        mentions: mentionUids,
+        mentionsEveryone,
+      },
+    }).then(() => {
+      console.log("[reply] parent updated with lastReply", { parentId, mentions: mentionUids });
+    }).catch((err) => console.warn("reply parent update failed", err));
+  } catch (err) {
+    alert("Reply failed: " + err.message);
+  }
+});
+
+// ===========================================================================
+// #3 Search (incremental, current channel)
+// ===========================================================================
+
+function openSearch() {
+  el.searchBar.hidden = false;
+  el.inputSearch.focus();
+  el.inputSearch.select();
+}
+function closeSearch() {
+  el.searchBar.hidden = true;
+  if (state.searchQuery) {
+    state.searchQuery = "";
+    el.searchCount.textContent = "";
+    renderMessages(state.currentMessages, state.currentChannelId);
+  }
+}
+el.btnSearch.addEventListener("click", openSearch);
+el.btnSearchClose.addEventListener("click", closeSearch);
+el.inputSearch.addEventListener("input", () => {
+  state.searchQuery = el.inputSearch.value;
+  renderMessages(state.currentMessages, state.currentChannelId);
+});
+el.inputSearch.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { e.preventDefault(); closeSearch(); }
+});
+
+// ===========================================================================
+// #5 Polls
+// ===========================================================================
+
+el.btnPoll.addEventListener("click", openPollDialog);
+function openPollDialog() {
+  el.pollQuestion.value = "";
+  el.pollOptions.value = "";
+  el.pollMulti.checked = false;
+  el.pollError.hidden = true;
+  el.dialogPoll.showModal();
+}
+el.btnPollCancel.addEventListener("click", () => el.dialogPoll.close());
+el.formPoll.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const question = el.pollQuestion.value.trim();
+  const options = el.pollOptions.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  const multi = el.pollMulti.checked;
+  if (!question) { el.pollError.textContent = "Question required."; el.pollError.hidden = false; return; }
+  if (options.length < 2) { el.pollError.textContent = "Need at least 2 options."; el.pollError.hidden = false; return; }
+  if (options.length > 10) { el.pollError.textContent = "Maximum 10 options."; el.pollError.hidden = false; return; }
+  const channelId = state.currentChannelId;
+  try {
+    await addDoc(collection(db, "channels", channelId, "messages"), {
+      type: "poll",
+      text: "",
+      image: null,
+      poll: {
+        question,
+        options: options.map((label) => ({ label, votes: [] })),
+        multi,
+      },
+      authorUid: state.user.uid,
+      authorEmail: state.user.email,
+      authorName: state.userDoc.displayName,
+      authorAffiliation: state.userDoc.affiliation || "",
+      mentions: [],
+      mentionsEveryone: false,
+      createdAt: serverTimestamp(),
+      editedAt: null,
+      deleted: false,
+      backedUpAt: null,
+    });
+    el.dialogPoll.close();
+  } catch (err) {
+    el.pollError.textContent = err.message;
+    el.pollError.hidden = false;
+  }
+});
+
+function renderPollCard(channelId, m) {
+  const { question, options = [], multi } = m.poll || {};
+  const card = document.createElement("div");
+  card.className = "poll-card";
+  const q = document.createElement("div");
+  q.className = "poll-question";
+  q.textContent = "📊 " + question;
+  card.appendChild(q);
+  const total = options.reduce((sum, o) => sum + (o.votes || []).length, 0);
+  options.forEach((opt, idx) => {
+    const uids = opt.votes || [];
+    const voted = uids.includes(state.user.uid);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "poll-option" + (voted ? " voted" : "");
+    const pct = total > 0 ? Math.round((uids.length / total) * 100) : 0;
+    btn.innerHTML =
+      `<span class="poll-bar" style="width:${pct}%"></span>` +
+      `<span><span class="poll-label"></span>` +
+      `<span class="poll-count">${uids.length} · ${pct}%</span></span>`;
+    btn.querySelector(".poll-label").textContent = opt.label;
+    btn.title = uids.map((u) => getUserByUid(u)?.displayName || "").filter(Boolean).join(", ");
+    btn.addEventListener("click", () => togglePollVote(channelId, m, idx));
+    card.appendChild(btn);
+  });
+  const totalEl = document.createElement("div");
+  totalEl.className = "poll-total";
+  totalEl.textContent = `${total} vote${total === 1 ? "" : "s"}${multi ? " · multi-select" : ""}`;
+  card.appendChild(totalEl);
+  return card;
+}
+
+async function togglePollVote(channelId, m, optionIdx) {
+  const uid = state.user.uid;
+  const poll = JSON.parse(JSON.stringify(m.poll));
+  const isVoted = (poll.options[optionIdx].votes || []).includes(uid);
+  if (!poll.multi) {
+    // Single-choice: remove uid from all options first
+    for (const o of poll.options) { o.votes = (o.votes || []).filter((u) => u !== uid); }
+  }
+  if (isVoted) {
+    poll.options[optionIdx].votes = (poll.options[optionIdx].votes || []).filter((u) => u !== uid);
+  } else {
+    poll.options[optionIdx].votes = [...(poll.options[optionIdx].votes || []), uid];
+  }
+  try {
+    await updateDoc(doc(db, "channels", channelId, "messages", m.id), { poll });
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+// ===========================================================================
+// #6 Online presence
+// ===========================================================================
+
+function startHeartbeat() {
+  stopHeartbeat();
+  const beat = async () => {
+    if (!document.hasFocus()) return;
+    try {
+      await updateDoc(doc(db, "users", state.user.uid), { lastSeenAt: serverTimestamp() });
+    } catch (_) { /* ignore */ }
+  };
+  beat();
+  state.heartbeatTimer = setInterval(beat, 30000);
+  window.addEventListener("focus", beat);
+}
+function stopHeartbeat() {
+  if (state.heartbeatTimer) { clearInterval(state.heartbeatTimer); state.heartbeatTimer = null; }
+}
+function isUserOnline(user) {
+  const ts = user?.lastSeenAt;
+  if (!ts) return false;
+  const ms = ts.toMillis ? ts.toMillis() : (ts.seconds ? ts.seconds * 1000 : 0);
+  return Date.now() - ms < 90 * 1000;
+}
+
+// ===========================================================================
+// #7 Typing indicator
+// ===========================================================================
+
+function onComposeTyping() {
+  if (!state.currentChannelId) return;
+  const ch = state.channels.find((c) => c.id === state.currentChannelId);
+  if (!ch || ch.type === "dm") { /* ok, still show */ }
+  clearTimeout(state.typingWriteTimer);
+  state.typingWriteTimer = setTimeout(() => {
+    setDoc(doc(db, "channels", state.currentChannelId, "typing", state.user.uid), {
+      name: state.userDoc?.displayName || "",
+      ts: serverTimestamp(),
+    }).catch(() => {});
+  }, 300);
+}
+function subscribeTypingForCurrent() {
+  if (state.unsubTyping) { state.unsubTyping(); state.unsubTyping = null; }
+  if (!state.currentChannelId) return;
+  const q = collection(db, "channels", state.currentChannelId, "typing");
+  state.unsubTyping = onSnapshot(q, (snap) => {
+    const now = Date.now();
+    const typers = [];
+    snap.docs.forEach((d) => {
+      if (d.id === state.user.uid) return;
+      const data = d.data();
+      const ms = data.ts?.toMillis ? data.ts.toMillis() : 0;
+      if (now - ms < 5000) typers.push(data.name || "Someone");
+    });
+    if (typers.length === 0) { el.typingIndicator.hidden = true; el.typingIndicator.textContent = ""; return; }
+    el.typingIndicator.hidden = false;
+    el.typingIndicator.textContent = typers.length === 1
+      ? `${typers[0]} is typing…`
+      : `${typers.slice(0, 2).join(", ")}${typers.length > 2 ? ` +${typers.length - 2}` : ""} are typing…`;
+  });
+}
+async function clearOwnTyping() {
+  if (!state.currentChannelId) return;
+  deleteDoc(doc(db, "channels", state.currentChannelId, "typing", state.user.uid)).catch(() => {});
+}
+
+// ===========================================================================
+// #9 Bookmarks / Saved messages
+// ===========================================================================
+
+async function toggleSave(channelId, m) {
+  const saved = state.userDoc?.savedMessages || [];
+  const key = (s) => s.channelId + "/" + s.messageId;
+  const mine = { channelId, messageId: m.id };
+  const isSaved = saved.some((s) => key(s) === key(mine));
+  const next = isSaved
+    ? saved.filter((s) => key(s) !== key(mine))
+    : [...saved, { channelId, messageId: m.id, savedAt: new Date().toISOString() }];
+  try {
+    await updateDoc(doc(db, "users", state.user.uid), { savedMessages: next });
+    state.userDoc.savedMessages = next;
+    // Re-render current list to update icon
+    renderMessages(state.currentMessages, state.currentChannelId);
+  } catch (err) {
+    alert("Save failed: " + err.message);
+  }
+}
+
+el.btnShowBookmarks.addEventListener("click", async () => {
+  el.userMenuDropdown.hidden = true;
+  el.btnUserMenu.setAttribute("aria-expanded", "false");
+  await openBookmarks();
+});
+el.btnBookmarksClose.addEventListener("click", () => el.dialogBookmarks.close());
+
+async function openBookmarks() {
+  el.bookmarksList.innerHTML = "Loading…";
+  el.dialogBookmarks.showModal();
+  const saved = (state.userDoc?.savedMessages || []).slice().reverse();
+  if (saved.length === 0) {
+    el.bookmarksList.innerHTML = `<p class="hint">You haven't saved anything yet. Click 🔖 on a message to save it.</p>`;
+    return;
+  }
+  el.bookmarksList.innerHTML = "";
+  for (const s of saved) {
+    try {
+      const snap = await getDoc(doc(db, "channels", s.channelId, "messages", s.messageId));
+      if (!snap.exists()) continue;
+      const m = { id: snap.id, ...snap.data() };
+      const ch = state.channels.find((c) => c.id === s.channelId);
+      const item = document.createElement("div");
+      item.className = "bookmark-item";
+      item.appendChild(renderAvatar(getUserByUid(m.authorUid) || { authorName: m.authorName }, "sm"));
+      const bodyEl = document.createElement("div");
+      bodyEl.className = "bookmark-item-body";
+      const meta = document.createElement("div");
+      meta.className = "bookmark-item-meta";
+      meta.textContent =
+        (ch ? (ch.type === "dm" ? "@" + (getDmOtherUser(ch)?.displayName || "dm") : "#" + ch.name) : "(channel)") +
+        " · " + (m.authorName || "") + " · " + formatTime(m.createdAt);
+      const text = document.createElement("div");
+      text.innerHTML = renderMessageBody(m.text || (m.image ? "[image]" : "[message]")).html;
+      bodyEl.appendChild(meta);
+      bodyEl.appendChild(text);
+      item.appendChild(bodyEl);
+      item.addEventListener("click", () => {
+        el.dialogBookmarks.close();
+        selectChannel(s.channelId);
+        state.pendingScrollToMsg = s.messageId;
+      });
+      el.bookmarksList.appendChild(item);
+    } catch (err) {
+      console.warn("bookmark load failed", err);
+    }
+  }
+}
+
+// ===========================================================================
+// #10 Permalinks
+// ===========================================================================
+
+function channelPermalink(channelId, messageId) {
+  const base = window.location.origin + window.location.pathname;
+  return `${base}#c=${encodeURIComponent(channelId)}&m=${encodeURIComponent(messageId)}`;
+}
+async function copyPermalink(channelId, messageId) {
+  const url = channelPermalink(channelId, messageId);
+  try {
+    await navigator.clipboard.writeText(url);
+    showFlashMessage("Link copied to clipboard");
+  } catch (_) {
+    prompt("Copy this link:", url);
+  }
+}
+function showFlashMessage(text) {
+  const div = document.createElement("div");
+  div.className = "fatal-error";
+  div.style.background = "var(--surface)";
+  div.style.color = "var(--text-color)";
+  div.style.borderColor = "var(--accent)";
+  div.textContent = text;
+  document.body.appendChild(div);
+  setTimeout(() => div.remove(), 1800);
+}
+
+function handlePermalinkInHash() {
+  const hash = window.location.hash.replace(/^#/, "");
+  if (!hash) return;
+  const params = new URLSearchParams(hash);
+  const c = params.get("c");
+  const m = params.get("m");
+  if (c) {
+    // Channel list may not be loaded yet; defer until it is.
+    const trySelect = () => {
+      if (state.channels.find((ch) => ch.id === c)) {
+        selectChannel(c);
+        if (m) state.pendingScrollToMsg = m;
+        return true;
+      }
+      return false;
+    };
+    if (!trySelect()) {
+      const interval = setInterval(() => {
+        if (trySelect()) clearInterval(interval);
+      }, 200);
+      setTimeout(() => clearInterval(interval), 5000);
+    }
+  }
+  // Clean the hash so subsequent clicks work.
+  history.replaceState({}, "", window.location.pathname);
+}
+
+// ===========================================================================
+// #11 Keyboard shortcuts + Channel switcher
+// ===========================================================================
+
+document.addEventListener("keydown", (e) => {
+  // Don't fire shortcuts when typing in inputs
+  const tag = (e.target?.tagName || "").toLowerCase();
+  const inInput = tag === "input" || tag === "textarea" || e.target?.isContentEditable;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    openSwitcher();
+    return;
+  }
+  if (e.key === "Escape") {
+    if (el.dialogSwitcher.open) el.dialogSwitcher.close();
+    if (!el.searchBar.hidden) { closeSearch(); return; }
+    if (!el.threadPanel.hidden) { closeThread(); return; }
+  }
+  if (!inInput && e.key === "/") {
+    if (el.chatScreen.hidden) return;
+    e.preventDefault();
+    openSearch();
+  }
+});
+
+function openSwitcher() {
+  el.inputSwitcher.value = "";
+  renderSwitcherResults("");
+  el.dialogSwitcher.showModal();
+  setTimeout(() => el.inputSwitcher.focus(), 0);
+}
+el.inputSwitcher.addEventListener("input", () => renderSwitcherResults(el.inputSwitcher.value));
+el.inputSwitcher.addEventListener("keydown", (e) => {
+  const items = [...el.switcherResults.querySelectorAll(".switcher-result")];
+  const idx = items.findIndex((x) => x.classList.contains("active"));
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    if (items.length === 0) return;
+    items.forEach((x) => x.classList.remove("active"));
+    items[Math.min(items.length - 1, idx + 1)].classList.add("active");
+    items[Math.min(items.length - 1, idx + 1)].scrollIntoView({ block: "nearest" });
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    if (items.length === 0) return;
+    items.forEach((x) => x.classList.remove("active"));
+    items[Math.max(0, idx - 1)].classList.add("active");
+    items[Math.max(0, idx - 1)].scrollIntoView({ block: "nearest" });
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const act = items.find((x) => x.classList.contains("active")) || items[0];
+    if (act) act.click();
+  }
+});
+function renderSwitcherResults(q) {
+  el.switcherResults.innerHTML = "";
+  const qlow = q.trim().toLowerCase();
+  // Channels
+  const chs = state.channels.filter((c) => !c.archived).filter((c) => {
+    const label = c.type === "dm" ? (getDmOtherUser(c)?.displayName || "") : c.name;
+    return !qlow || label.toLowerCase().includes(qlow);
+  }).slice(0, 20);
+  // Users (for DM jump)
+  const us = state.allUsers.filter((u) => u.uid !== state.user.uid && u.displayName)
+    .filter((u) => !qlow || (u.displayName + " " + (u.email || "")).toLowerCase().includes(qlow))
+    .slice(0, 10);
+  let first = true;
+  for (const c of chs) {
+    const row = document.createElement("div");
+    row.className = "switcher-result" + (first ? " active" : "");
+    first = false;
+    const isDm = c.type === "dm";
+    const prefix = isDm ? "@" : (c.type === "team" ? "🔒" : "#");
+    row.innerHTML = `<span class="switcher-hash">${prefix}</span><span></span>`;
+    row.querySelector("span:last-child").textContent = isDm
+      ? (getDmOtherUser(c)?.displayName || "dm")
+      : c.name;
+    row.addEventListener("click", () => {
+      selectChannel(c.id);
+      el.dialogSwitcher.close();
+    });
+    el.switcherResults.appendChild(row);
+  }
+  for (const u of us) {
+    const row = document.createElement("div");
+    row.className = "switcher-result" + (first ? " active" : "");
+    first = false;
+    row.appendChild(renderAvatar(u, "xs"));
+    const label = document.createElement("span");
+    label.textContent = u.displayName + " — start DM";
+    row.appendChild(label);
+    row.addEventListener("click", async () => {
+      el.dialogSwitcher.close();
+      await openOrCreateDm(u.uid);
+    });
+    el.switcherResults.appendChild(row);
+  }
+  if (chs.length + us.length === 0) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.style.padding = "12px";
+    p.textContent = "No matches.";
+    el.switcherResults.appendChild(p);
+  }
+}
+
+// ===========================================================================
+// #12 Export channel as Markdown
+// ===========================================================================
+
+el.btnExportChannel.addEventListener("click", async () => {
+  el.userMenuDropdown.hidden = true;
+  el.btnUserMenu.setAttribute("aria-expanded", "false");
+  await exportCurrentChannel();
+});
+
+async function exportCurrentChannel() {
+  const ch = state.channels.find((c) => c.id === state.currentChannelId);
+  if (!ch) return;
+  const lines = [];
+  lines.push(`# ${ch.type === "dm" ? "DM with " + (getDmOtherUser(ch)?.displayName || "") : "#" + ch.name}`);
+  lines.push("");
+  lines.push(`_Exported ${new Date().toLocaleString()}_`);
+  lines.push("");
+  // Fetch all (up to 1000) messages
+  const q = query(
+    collection(db, "channels", ch.id, "messages"),
+    orderBy("createdAt", "asc"),
+    limit(1000),
+  );
+  const snap = await getDocs(q);
+  for (const d of snap.docs) {
+    const m = d.data();
+    if (m.deleted) continue;
+    const when = m.createdAt?.toDate ? m.createdAt.toDate().toLocaleString() : "";
+    const author = m.authorName || m.authorEmail || "unknown";
+    if (m.type === "poll" && m.poll) {
+      lines.push(`**${author}** · _${when}_  📊 **${m.poll.question}**`);
+      for (const o of m.poll.options || []) {
+        lines.push(`- ${o.label} (${(o.votes || []).length} votes)`);
+      }
+    } else {
+      lines.push(`**${author}** · _${when}_${m.pinned ? " 📌" : ""}`);
+      if (m.text) lines.push(m.text);
+      if (m.image?.url) lines.push(`[image](${m.image.url})`);
+      // Reactions summary
+      if (m.reactions) {
+        const rx = Object.entries(m.reactions)
+          .filter(([, uids]) => (uids || []).length > 0)
+          .map(([k, uids]) => `${k} ${uids.length}`).join("  ");
+        if (rx) lines.push(`> ${rx}`);
+      }
+    }
+    lines.push("");
+  }
+  const md = lines.join("\n");
+  const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `brs-chat-${ch.name || ch.id}-${new Date().toISOString().slice(0, 10)}.md`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// ===========================================================================
+// Notification preferences (per-user)
+// ===========================================================================
+
+const DEFAULT_NOTIF_PREFS = {
+  dm: true,
+  mention: true,
+  channel: true,
+  reactions: false,
+  all: false,
+  // email flags are saved but not yet delivered — Phase A via Functions/GAS
+  emailMention: false,
+  emailDm: false,
+  emailChannel: false,
+};
+
+function getNotifPrefs() {
+  // Public prefs (DM/mention/channel/reactions/all) live on users/{uid}.
+  // Private bits (webhook URLs) live on userSecrets/{uid} so other users
+  // can't read them.
+  const pub = state.userDoc?.notificationPrefs || {};
+  const secrets = state.userSecrets || {};
+  return {
+    ...DEFAULT_NOTIF_PREFS,
+    ...pub,
+    webhooks: secrets.webhooks || pub.webhooks || {},
+  };
+}
+
+// Start a subscription to the signed-in user's secrets doc.
+function subscribeUserSecrets() {
+  if (state.unsubSecrets) { state.unsubSecrets(); state.unsubSecrets = null; }
+  state.unsubSecrets = onSnapshot(doc(db, "userSecrets", state.user.uid), async (snap) => {
+    state.userSecrets = snap.exists() ? snap.data() : {};
+    // One-time migration: if old webhooks live on users/{uid}.notificationPrefs.webhooks
+    // and userSecrets is empty, copy them over and clear the old location.
+    const legacy = state.userDoc?.notificationPrefs?.webhooks;
+    if (legacy && !snap.exists()) {
+      try {
+        await setDoc(doc(db, "userSecrets", state.user.uid), { webhooks: legacy }, { merge: true });
+        // Scrub the old field (set empty) so other users can no longer read it.
+        await updateDoc(doc(db, "users", state.user.uid), {
+          [`notificationPrefs.webhooks`]: {},
+        });
+        console.log("[migration] moved webhooks to userSecrets");
+      } catch (err) {
+        console.warn("webhook migration failed", err);
+      }
+    }
+  }, (err) => {
+    console.warn("userSecrets subscription failed", err);
+  });
+}
+
+el.btnNotifPrefs?.addEventListener("click", () => {
+  el.userMenuDropdown.hidden = true;
+  el.btnUserMenu.setAttribute("aria-expanded", "false");
+  const p = getNotifPrefs();
+  el.notifDm.checked = p.dm;
+  el.notifMention.checked = p.mention;
+  el.notifChannel.checked = p.channel;
+  el.notifReactions.checked = p.reactions;
+  el.notifAll.checked = p.all;
+  el.notifEmailMention.checked = p.emailMention;
+  el.notifEmailDm.checked = p.emailDm;
+  el.notifEmailChannel.checked = p.emailChannel;
+  const w = p.webhooks || {};
+  el.webhookSlack.value = w.slack || "";
+  el.webhookTeams.value = w.teams || "";
+  el.webhookDiscord.value = w.discord || "";
+  el.webhookDm.checked = w.dm !== false;
+  el.webhookMention.checked = w.mention !== false;
+  el.webhookChannel.checked = w.channel !== false;
+  el.webhookAllReplies.checked = !!w.allReplies;
+  el.webhookAll.checked = !!w.all;
+  el.webhookTestStatus.textContent = "";
+  el.dialogNotifPrefs.showModal();
+});
+el.btnNotifPrefsCancel?.addEventListener("click", () => el.dialogNotifPrefs.close());
+el.formNotifPrefs?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const existing = state.userDoc?.notificationPrefs || {};
+  // Public prefs — visible to anyone (no URLs here).
+  const prefs = {
+    dm: el.notifDm.checked,
+    mention: el.notifMention.checked,
+    channel: el.notifChannel.checked,
+    reactions: el.notifReactions.checked,
+    all: el.notifAll.checked,
+    emailMention: existing.emailMention ?? DEFAULT_NOTIF_PREFS.emailMention,
+    emailDm: existing.emailDm ?? DEFAULT_NOTIF_PREFS.emailDm,
+    emailChannel: existing.emailChannel ?? DEFAULT_NOTIF_PREFS.emailChannel,
+    // webhooks intentionally NOT stored here anymore.
+    webhooks: {},
+  };
+  // Private — only self can read. Webhook URLs live here.
+  const secrets = {
+    webhooks: {
+      slack: el.webhookSlack.value.trim() || "",
+      teams: el.webhookTeams.value.trim() || "",
+      discord: el.webhookDiscord.value.trim() || "",
+      dm: el.webhookDm.checked,
+      mention: el.webhookMention.checked,
+      channel: el.webhookChannel.checked,
+      allReplies: el.webhookAllReplies.checked,
+      all: el.webhookAll.checked,
+    },
+  };
+  try {
+    await Promise.all([
+      updateDoc(doc(db, "users", state.user.uid), { notificationPrefs: prefs }),
+      setDoc(doc(db, "userSecrets", state.user.uid), secrets, { merge: true }),
+    ]);
+    state.userDoc = { ...state.userDoc, notificationPrefs: prefs };
+    state.userSecrets = { ...state.userSecrets, ...secrets };
+    el.dialogNotifPrefs.close();
+  } catch (err) {
+    alert("Save failed: " + err.message);
+  }
+});
+
+// ===========================================================================
+// Webhook forwarding (Slack / Teams / Discord)
+// While any BRS Community tab is open, matching events are POSTed directly
+// from the browser to the user's personal Slack/Teams/Discord webhook URLs.
+// In Phase A this moves server-side (Cloud Function) so it works when the
+// user has no tabs open.
+// ===========================================================================
+
+async function postWebhook(url, text) {
+  if (!url) return;
+  try {
+    if (url.includes("hooks.slack.com")) {
+      // Slack accepts CORS form-encoded POSTs with a `payload` param.
+      const body = new URLSearchParams({ payload: JSON.stringify({ text }) });
+      await fetch(url, { method: "POST", body, mode: "no-cors" });
+    } else if (url.includes("discord.com/api/webhooks") || url.includes("discordapp.com/api/webhooks")) {
+      // Discord accepts form-urlencoded content= for simple messages.
+      const body = new URLSearchParams({ content: text });
+      await fetch(url, { method: "POST", body, mode: "no-cors" });
+    } else {
+      // Teams (and generic) — expect JSON body.
+      await fetch(url, {
+        method: "POST",
+        mode: "no-cors",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+    }
+  } catch (err) {
+    console.warn("webhook post failed", err);
+  }
+}
+
+function forwardToWebhooks({ kind, ch, m, permalink }) {
+  const w = getNotifPrefs().webhooks || {};
+  const hasAny = w.slack || w.teams || w.discord;
+  const isReply = !!m.isReply;
+  let pass = false;
+  if (w.all) pass = true;
+  else if (isReply && w.allReplies) pass = true;
+  else if (kind === "dm" && w.dm) pass = true;
+  else if (kind === "mention" && w.mention) pass = true;
+  else if (kind === "channel" && w.channel) pass = true;
+  console.log("[webhook]", {
+    kind: kind || "(plain)", isReply, hasAny, pass,
+    prefs: {
+      dm: w.dm, mention: w.mention, channel: w.channel,
+      all: w.all, allReplies: w.allReplies,
+      slack: !!w.slack, teams: !!w.teams, discord: !!w.discord,
+    },
+    channel: ch.name || ch.id,
+  });
+  if (!hasAny || !pass) return;
+  const chLabel = ch.type === "dm"
+    ? `DM from ${m.authorName}`
+    : (ch.type === "team" ? `🔒${ch.name}` : `#${ch.name}`);
+  const prefix = kind === "mention" ? "@you mentioned"
+    : kind === "channel" ? "@channel"
+    : kind === "dm" ? "DM"
+    : (isReply ? "thread reply" : "message");
+  const threadTag = isReply && kind !== null ? " (thread reply)" : "";
+  const snippet = (m.text || (m.image ? "[image]" : "[message]")).slice(0, 300);
+  const text = `*BRS Community — ${prefix}${threadTag}* in ${chLabel}\n${m.authorName}: ${snippet}\n${permalink}`;
+  if (w.slack)   postWebhook(w.slack, text);
+  if (w.teams)   postWebhook(w.teams, text);
+  if (w.discord) postWebhook(w.discord, text);
+}
+
+el.btnWebhookTest?.addEventListener("click", async () => {
+  const url = el.webhookSlack.value.trim()
+    || el.webhookTeams.value.trim()
+    || el.webhookDiscord.value.trim();
+  if (!url) {
+    el.webhookTestStatus.textContent = "Paste at least one webhook URL first.";
+    return;
+  }
+  el.webhookTestStatus.textContent = "Sending…";
+  const text = `✅ Hello from BRS Community! This is a test message for ${state.userDoc?.displayName || "you"}.`;
+  const urls = [el.webhookSlack.value, el.webhookTeams.value, el.webhookDiscord.value]
+    .map((s) => s.trim()).filter(Boolean);
+  for (const u of urls) await postWebhook(u, text);
+  el.webhookTestStatus.textContent =
+    "Sent. Check your Slack/Teams/Discord. (no-cors mode hides errors; if nothing arrives, double-check the URL.)";
+});
+
+// ===========================================================================
+// Mentions view
+// ===========================================================================
+
+el.btnMentionsView?.addEventListener("click", () => {
+  renderMentionsView();
+  el.dialogMentionsView.showModal();
+});
+el.btnMentionsViewClose?.addEventListener("click", () => el.dialogMentionsView.close());
+
+function renderMentionsView() {
+  el.mentionsViewList.innerHTML = "";
+  const myUid = state.user?.uid;
+  if (!myUid) return;
+  const items = [];
+  for (const [cid, docs] of state.recentMessagesByChannel) {
+    const ch = state.channels.find((c) => c.id === cid);
+    if (!ch || ch.archived) continue;
+    for (const m of docs) {
+      if (m.authorUid === myUid || m.deleted) continue;
+      const isDm = ch.type === "dm";
+      const isMention = (m.mentions || []).includes(myUid);
+      const isBroadcast = m.mentionsEveryone === true;
+      if (!(isDm || isMention || isBroadcast)) continue;
+      items.push({ ch, m, isDm, isMention, isBroadcast });
+    }
+  }
+  items.sort((a, b) => {
+    const am = a.m.createdAt?.toMillis?.() ?? 0;
+    const bm = b.m.createdAt?.toMillis?.() ?? 0;
+    return bm - am;
+  });
+  const top = items.slice(0, 50);
+  if (top.length === 0) {
+    el.mentionsViewList.innerHTML = `<p class="hint">No mentions yet. You'll see @you, @channel, and DMs here.</p>`;
+    return;
+  }
+  for (const it of top) {
+    const { ch, m, isDm, isMention } = it;
+    const item = document.createElement("div");
+    item.className = "bookmark-item";
+    item.appendChild(renderAvatar(getUserByUid(m.authorUid) || { authorName: m.authorName }, "sm"));
+    const bodyEl = document.createElement("div");
+    bodyEl.className = "bookmark-item-body";
+    const meta = document.createElement("div");
+    meta.className = "bookmark-item-meta";
+    const kindLabel = isMention ? "@you" : isDm ? "DM" : "@channel";
+    const chTitle = ch.type === "dm"
+      ? "@" + (getDmOtherUser(ch)?.displayName || "dm")
+      : "#" + ch.name;
+    meta.textContent = `${kindLabel} · ${chTitle} · ${m.authorName} · ${formatTime(m.createdAt)}`;
+    const text = document.createElement("div");
+    text.innerHTML = renderMessageBody(m.text || (m.image ? "[image]" : "[message]")).html;
+    bodyEl.appendChild(meta);
+    bodyEl.appendChild(text);
+    item.appendChild(bodyEl);
+    item.addEventListener("click", () => {
+      el.dialogMentionsView.close();
+      selectChannel(ch.id);
+      state.pendingScrollToMsg = m.id;
+    });
+    el.mentionsViewList.appendChild(item);
+  }
+}
+
+// ===========================================================================
+// Notifications (Level 1: Browser Notifications API while tab is open)
+//
+// PHASE A UPGRADE: Replace with Level 2 push notifications once Blaze is active:
+//   1. Add manifest.json + service-worker.js for PWA (iOS push requires PWA)
+//   2. Enable FCM (Firebase Cloud Messaging)
+//   3. Register user FCM tokens into users/{uid}.fcmTokens[] on sign-in
+//   4. Cloud Function onMessageCreated() that fans out FCM sends to tagged UIDs
+//   5. Service worker handles 'push' event → Notification + click → open channel
+//   6. Delete the polling-in-foreground logic below once FCM covers it
+// Grep for "PHASE A UPGRADE" to find this block.
+// ===========================================================================
+
+const DISMISS_KEY = "brsChat.notifyBannerDismissed";
+const channelNotifyListeners = new Map();  // channelId -> unsub
+const seenLastMsgId = new Map();            // channelId -> last message id we've "seen"
+const seenLastReplyAt = new Map();          // "channelId/parentId" -> lastReplyAt ms we've "seen"
+
+// Attach banner button listeners once at module load.
+el.btnEnableNotify?.addEventListener("click", async () => {
+  if (!("Notification" in window)) {
+    alert("This browser doesn't support notifications.");
+    return;
+  }
+  const perm = await Notification.requestPermission();
+  updateNotifyBanner();
+  if (perm === "granted") {
+    new Notification("BRS Community notifications on", {
+      body: "You'll be notified for @mentions, @channel and DMs.",
+      icon: "./logo.png",
+    });
+  }
+});
+el.btnDismissNotify?.addEventListener("click", () => {
+  localStorage.setItem(DISMISS_KEY, "1");
+  el.notificationBanner.hidden = true;
+});
+
+function initNotifications() {
+  updateNotifyBanner();
+}
+
+function updateNotifyBanner() {
+  const supported = "Notification" in window;
+  const dismissed = localStorage.getItem(DISMISS_KEY) === "1";
+  const permDefault = supported && Notification.permission === "default";
+  el.notificationBanner.hidden = !supported || dismissed || !permDefault;
+}
+
+// For each channel the user has access to, keep an onSnapshot on recent
+// messages (limit 20). Used for:
+// - Level 1 browser notifications on new mentions/DMs
+// - Tracking unread mention counts per channel
+// - Populating the Mentions view
+function refreshChannelNotifyListeners() {
+  const currentIds = new Set(state.channels.map((c) => c.id));
+  for (const [cid, unsub] of channelNotifyListeners) {
+    if (!currentIds.has(cid)) {
+      unsub();
+      channelNotifyListeners.delete(cid);
+      seenLastMsgId.delete(cid);
+      state.recentMessagesByChannel.delete(cid);
+      state.unreadMentionsByChannel.delete(cid);
+    }
+  }
+  for (const ch of state.channels) {
+    if (channelNotifyListeners.has(ch.id)) continue;
+    const q = query(
+      collection(db, "channels", ch.id, "messages"),
+      orderBy("createdAt", "desc"),
+      limit(20),
+    );
+    let initialized = false;
+    const unsub = onSnapshot(q, (snap) => {
+      const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      state.recentMessagesByChannel.set(ch.id, docs);
+      recomputeUnreadMentions(ch.id);
+      updateTabTitleAndMentionBadge();
+      renderChannelLists();
+      if (el.dialogMentionsView?.open) renderMentionsView();
+      const latest = docs[0];
+      if (!latest) { initialized = true; return; }
+      if (!initialized) {
+        seenLastMsgId.set(ch.id, latest.id);
+        initialized = true;
+        return;
+      }
+      // Also detect thread replies on any message in this channel.
+      // Only notify AFTER the initial snapshot completes (so we don't spam
+      // on first load for existing replies).
+      for (const m of docs) {
+        const replyTs = m.lastReplyAt?.toMillis?.() ?? 0;
+        if (!replyTs || !m.lastReply) continue;
+        const key = ch.id + "/" + m.id;
+        const seenTs = seenLastReplyAt.get(key) || 0;
+        if (replyTs > seenTs) {
+          const wasFirstTime = !seenLastReplyAt.has(key);
+          seenLastReplyAt.set(key, replyTs);
+          console.log("[reply-detect]", {
+            channel: ch.name, parentId: m.id,
+            replyTs, seenTs, initialized, wasFirstTime,
+            willNotify: initialized,
+          });
+          if (initialized) {
+            // Synthesize a message-shaped object so maybeNotify / webhook
+            // forwarding can use the normal code path.
+            const synth = {
+              id: m.id,
+              text: m.lastReply.text,
+              authorUid: m.lastReply.authorUid,
+              authorName: m.lastReply.authorName,
+              authorEmail: m.lastReply.authorEmail,
+              mentions: m.lastReply.mentions || [],
+              mentionsEveryone: !!m.lastReply.mentionsEveryone,
+              createdAt: m.lastReplyAt,
+              isReply: true,
+              parentMessageId: m.id,
+            };
+            maybeNotify(ch, synth);
+          }
+        }
+      }
+
+      if (seenLastMsgId.get(ch.id) === latest.id) return;
+      seenLastMsgId.set(ch.id, latest.id);
+      maybeNotify(ch, latest);
+    }, (err) => {
+      console.warn("notify listener failed for", ch.id, err);
+    });
+    channelNotifyListeners.set(ch.id, unsub);
+  }
+}
+
+function tearDownChannelNotifyListeners() {
+  for (const unsub of channelNotifyListeners.values()) unsub();
+  channelNotifyListeners.clear();
+  seenLastMsgId.clear();
+  seenLastReplyAt.clear();
+  state.recentMessagesByChannel.clear();
+  state.unreadMentionsByChannel.clear();
+  updateTabTitleAndMentionBadge();
+}
+
+function recomputeUnreadMentions(channelId) {
+  const docs = state.recentMessagesByChannel.get(channelId) || [];
+  const lastRead = state.lastReadByChannel[channelId];
+  const lastReadMs = lastRead?.toMillis ? lastRead.toMillis()
+    : (lastRead?.seconds ? lastRead.seconds * 1000 : 0);
+  let count = 0;
+  for (const m of docs) {
+    if (m.authorUid === state.user?.uid) continue;
+    if (m.deleted) continue;
+    const ms = m.createdAt?.toMillis ? m.createdAt.toMillis() : 0;
+    if (ms <= lastReadMs) continue;
+    const ch = state.channels.find((c) => c.id === channelId);
+    const isDm = ch?.type === "dm";
+    const isMention = (m.mentions || []).includes(state.user.uid);
+    const isBroadcast = m.mentionsEveryone === true;
+    if (isDm || isMention || isBroadcast) count++;
+  }
+  state.unreadMentionsByChannel.set(channelId, count);
+}
+
+function totalUnreadMentions() {
+  let sum = 0;
+  for (const n of state.unreadMentionsByChannel.values()) sum += n;
+  return sum;
+}
+
+function updateTabTitleAndMentionBadge() {
+  const total = totalUnreadMentions();
+  document.title = total > 0 ? `(${total}) ${BASE_TAB_TITLE}` : BASE_TAB_TITLE;
+  if (el.mentionsTotal) {
+    el.mentionsTotal.textContent = total;
+    el.mentionsTotal.hidden = total === 0;
+  }
+}
+
+function maybeNotify(ch, m) {
+  if (!m || m.deleted) return;
+
+  const isSelf = m.authorUid === state.user.uid;
+  const isMention = (m.mentions || []).includes(state.user.uid);
+  const isBroadcast = m.mentionsEveryone === true;
+  const isDm = ch.type === "dm";
+  const kind = isDm ? "dm" : isMention ? "mention" : (isBroadcast ? "channel" : null);
+  console.log("[notify]", {
+    channel: ch.name || ch.id,
+    kind: kind || "(none)",
+    self: isSelf,
+    author: m.authorName,
+    text: (m.text || "").slice(0, 60),
+    mentions: m.mentions,
+    mentionsEveryone: m.mentionsEveryone,
+  });
+  if (isSelf) return;         // never notify yourself about your own message
+
+  // (1) Webhook forwarding — always tried; the function applies its own
+  //     per-event filter (dm / mention / channel / allReplies / all).
+  forwardToWebhooks({ kind, ch, m, permalink: channelPermalink(ch.id, m.id) });
+
+  // (2) Browser desktop notification — only meaningful for DM/mention/channel
+  //     kinds; plain messages never pop desktop notifications even if the
+  //     webhook is opted in to "everything".
+  if (!kind) return;
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  if (document.hasFocus() && state.currentChannelId === ch.id) return;
+
+  const prefs = getNotifPrefs();
+  const passes =
+    (prefs.all) ||
+    (isDm && prefs.dm) ||
+    (isMention && prefs.mention) ||
+    (isBroadcast && prefs.channel);
+  if (!passes) return;
+
+  const author = getUserByUid(m.authorUid);
+  const chTitle = ch.type === "dm"
+    ? (getDmOtherUser(ch)?.displayName || "Direct message")
+    : ("#" + ch.name);
+  const title = `${author?.displayName || m.authorName || "New message"}  ·  ${chTitle}`;
+  const body = m.text || (m.image ? "[image]" : "");
+  try {
+    const n = new Notification(title, {
+      body: body.slice(0, 180),
+      icon: author?.photoURL || "./logo.png",
+      badge: "./logo.png",
+      tag: ch.id,  // collapse multiple into one per channel
+      renotify: false,
+    });
+    n.onclick = () => {
+      window.focus();
+      selectChannel(ch.id);
+      n.close();
+    };
+  } catch (err) {
+    console.warn("notification failed", err);
+  }
+}
+
+// ===========================================================================
+// Bootstrap
+// ===========================================================================
+
+(async function bootstrap() {
+  await handleEmailLinkReturn();
+})();
