@@ -40,6 +40,15 @@ if (PHASE_0) {
   });
 }
 
+// Generic handler for all × close buttons marked with data-close-dialog.
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("[data-close-dialog]");
+  if (!t) return;
+  const id = t.getAttribute("data-close-dialog");
+  const dlg = document.getElementById(id);
+  if (dlg?.open) dlg.close();
+});
+
 // Inherit theme from parent site if embedded later.
 (function initTheme() {
   try {
@@ -260,6 +269,7 @@ const state = {
   pendingScrollToMsg: null,   // msg id to scroll-to after messages load (permalink)
   recentMessagesByChannel: new Map(),  // channelId -> array of recent message docs
   unreadMentionsByChannel: new Map(),  // channelId -> count of unread mentions for me
+  draftsByChannel: new Map(),          // channelId -> in-progress composer text
   userSecrets: null,          // userSecrets/{uid} — private (webhooks, etc.) — not visible to others
   unsubSecrets: null,
   adminEmails: [],            // from config/admins.emails
@@ -947,8 +957,15 @@ function tsGt(a, b) {
 // --- Channel selection ---
 
 function selectChannel(channelId) {
+  // Save current draft before switching
+  if (state.currentChannelId) {
+    state.draftsByChannel.set(state.currentChannelId, el.inputMessage.value);
+  }
   if (state.unsubMessages) { state.unsubMessages(); state.unsubMessages = null; }
   state.currentChannelId = channelId;
+  // Restore draft for the new channel (or empty)
+  el.inputMessage.value = state.draftsByChannel.get(channelId) || "";
+  autoResizeTextarea(el.inputMessage);
   const ch = state.channels.find((c) => c.id === channelId);
   if (!ch) return;
   let titleText = ch.name;
@@ -1599,6 +1616,7 @@ el.formCompose.addEventListener("submit", async (e) => {
   };
 
   el.inputMessage.value = "";
+  state.draftsByChannel.delete(channelId);
   autoResizeTextarea(el.inputMessage);
   clearOwnTyping();
 

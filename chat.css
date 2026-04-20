@@ -946,6 +946,28 @@ label small { display: block; color: var(--text-muted); font-size: 0.75rem; marg
 .dialog h2 { margin-bottom: 16px; }
 .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 .dialog-actions button { flex: 0 0 auto; padding: 8px 16px; }
+/* Make non-primary dialog buttons clearly visible. */
+.dialog-actions button:not(.primary-btn):not(.secondary-btn):not(.icon-btn):not(.remove-btn) {
+  background: var(--surface-2);
+  border: 1px solid var(--border-color);
+  color: var(--text-color);
+}
+.dialog-actions button:not(.primary-btn):hover { background: var(--surface-3); }
+
+.dialog-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: transparent;
+  border: 0;
+  font-size: 1.2rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+.dialog-close:hover { background: var(--surface-2); color: var(--text-color); }
+.dialog { position: relative; }
 
 .profile-preview {
   display: flex;
