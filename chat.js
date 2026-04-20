@@ -1174,7 +1174,7 @@ function renderMessage(m, channelId) {
       }
       pill.querySelector(".reaction-count").textContent = uids.length;
       pill.title = uids.map((u) => getUserByUid(u)?.displayName || "?").join(", ");
-      pill.addEventListener("click", () => toggleReaction(channelId, m.id, key, uids));
+      pill.addEventListener("click", () => toggleReaction(channelId, m, key, uids));
       wrap.appendChild(pill);
     }
     body.appendChild(wrap);
@@ -1241,7 +1241,7 @@ function renderMessage(m, channelId) {
     const delBtn = document.createElement("button");
     delBtn.type = "button";
     delBtn.textContent = "Delete";
-    delBtn.addEventListener("click", () => deleteMessage(channelId, m.id));
+    delBtn.addEventListener("click", () => deleteMessage(channelId, m));
     actions.appendChild(delBtn);
   }
   body.appendChild(actions);
@@ -1305,7 +1305,7 @@ function openEmojiPicker(anchorBtn, channelId, m) {
     }
     btn.addEventListener("click", () => {
       const existing = (m.reactions && m.reactions[r.key]) || [];
-      toggleReaction(channelId, m.id, r.key, existing);
+      toggleReaction(channelId, m, r.key, existing);
       closeEmojiPicker();
     });
     picker.appendChild(btn);
@@ -1380,12 +1380,11 @@ el.formNewReaction?.addEventListener("submit", async (e) => {
   }
 });
 
-async function toggleReaction(channelId, messageId, emoji, currentUids) {
+async function toggleReaction(channelId, m, emoji, currentUids) {
   const myUid = state.user.uid;
   const has = currentUids.includes(myUid);
-  const ref = doc(db, "channels", channelId, "messages", messageId);
   try {
-    await updateDoc(ref, {
+    await updateDoc(msgDocRef(channelId, m), {
       [`reactions.${emoji}`]: has ? arrayRemove(myUid) : arrayUnion(myUid),
     });
   } catch (err) {
@@ -1393,11 +1392,20 @@ async function toggleReaction(channelId, messageId, emoji, currentUids) {
   }
 }
 
+// Returns the Firestore doc ref for a message, whether it's a top-level
+// message or a reply living in the subcollection messages/{parent}/replies/{r}.
+function msgDocRef(channelId, m) {
+  if (m.parentId && m.id !== m.parentId) {
+    return doc(db, "channels", channelId, "messages", m.parentId, "replies", m.id);
+  }
+  return doc(db, "channels", channelId, "messages", m.id);
+}
+
 async function editMessage(channelId, m) {
   const newText = window.prompt("Edit message:", m.text);
   if (newText === null || newText.trim() === m.text.trim()) return;
   try {
-    await updateDoc(doc(db, "channels", channelId, "messages", m.id), {
+    await updateDoc(msgDocRef(channelId, m), {
       text: newText.trim(),
       editedAt: serverTimestamp(),
     });
@@ -1406,10 +1414,10 @@ async function editMessage(channelId, m) {
   }
 }
 
-async function deleteMessage(channelId, messageId) {
+async function deleteMessage(channelId, m) {
   if (!window.confirm("Delete this message?")) return;
   try {
-    await deleteDoc(doc(db, "channels", channelId, "messages", messageId));
+    await deleteDoc(msgDocRef(channelId, m));
   } catch (err) {
     alert("Delete failed: " + err.message);
   }
@@ -2327,7 +2335,7 @@ el.btnPinnedToggle.addEventListener("click", () => {
 
 async function togglePin(channelId, m) {
   try {
-    await updateDoc(doc(db, "channels", channelId, "messages", m.id), {
+    await updateDoc(msgDocRef(channelId, m), {
       pinned: !m.pinned,
     });
   } catch (err) {
