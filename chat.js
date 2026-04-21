@@ -1222,11 +1222,18 @@ function renderMessage(m, channelId) {
     `<span class="message-affiliation"></span>` +
     `<span class="message-time"></span>` +
     (m.editedAt ? `<span class="message-edited">(edited)</span>` : "");
-  meta.querySelector(".message-author").textContent = m.authorName || "unknown";
-  if (m.authorAffiliation) meta.querySelector(".message-affiliation").textContent = m.authorAffiliation;
+  // Prefer the live displayName/affiliation from the users cache so profile
+  // renames propagate to already-rendered messages. Fall back to the values
+  // denormalized onto the message at send time (for deleted users, etc.).
+  const liveUser = getUserByUid(m.authorUid);
+  const displayName = liveUser?.displayName || m.authorName || "unknown";
+  const affiliation = liveUser?.affiliation ?? m.authorAffiliation ?? "";
+  const email = liveUser?.email || m.authorEmail || "";
+  meta.querySelector(".message-author").textContent = displayName;
+  if (affiliation) meta.querySelector(".message-affiliation").textContent = affiliation;
   meta.querySelector(".message-time").textContent = formatTime(m.createdAt);
-  // Email is intentionally hidden in chat rows; it's still visible in Members.
-  if (m.authorEmail) meta.title = m.authorEmail;
+  // Email shown as tooltip so users can verify identity even after a rename.
+  if (email) meta.title = email;
   body.appendChild(meta);
 
   if (m.deleted) {
@@ -2487,7 +2494,8 @@ function renderPinnedBar(docs, channelId) {
     text.innerHTML =
       `<span class="pinned-item-author"></span> ` +
       `<span class="pinned-item-preview"></span>`;
-    text.querySelector(".pinned-item-author").textContent = m.authorName + ":";
+    text.querySelector(".pinned-item-author").textContent =
+      (getUserByUid(m.authorUid)?.displayName || m.authorName || "?") + ":";
     const preview = (m.text || (m.image ? "[image]" : "[poll]")).slice(0, 120);
     text.querySelector(".pinned-item-preview").textContent = preview;
     li.appendChild(text);
@@ -2851,7 +2859,7 @@ async function openBookmarks() {
       meta.className = "bookmark-item-meta";
       meta.textContent =
         (ch ? (ch.type === "dm" ? "@" + (getDmOtherUser(ch)?.displayName || "dm") : "#" + ch.name) : "(channel)") +
-        " · " + (m.authorName || "") + " · " + formatTime(m.createdAt);
+        " · " + (getUserByUid(m.authorUid)?.displayName || m.authorName || "") + " · " + formatTime(m.createdAt);
       const text = document.createElement("div");
       text.innerHTML = renderMessageBody(m.text || (m.image ? "[image]" : "[message]")).html;
       bodyEl.appendChild(meta);
@@ -3371,7 +3379,8 @@ function renderMentionsView() {
     const chTitle = ch.type === "dm"
       ? "@" + (getDmOtherUser(ch)?.displayName || "dm")
       : "#" + ch.name;
-    meta.textContent = `${kindLabel} · ${chTitle} · ${m.authorName} · ${formatTime(m.createdAt)}`;
+    const liveName = getUserByUid(m.authorUid)?.displayName || m.authorName || "?";
+    meta.textContent = `${kindLabel} · ${chTitle} · ${liveName} · ${formatTime(m.createdAt)}`;
     const text = document.createElement("div");
     text.innerHTML = renderMessageBody(m.text || (m.image ? "[image]" : "[message]")).html;
     bodyEl.appendChild(meta);
