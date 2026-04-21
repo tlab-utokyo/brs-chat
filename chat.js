@@ -10,7 +10,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
 import {
   getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc,
-  getDoc, getDocs, query, where, orderBy, limit, onSnapshot,
+  getDoc, getDocs, query, where, orderBy, limit, onSnapshot, runTransaction,
   serverTimestamp, Timestamp, arrayUnion, arrayRemove, increment, deleteField,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import {
@@ -3070,7 +3070,28 @@ async function postWebhook(url, text) {
   }
 }
 
-function forwardToWebhooks({ kind, ch, m, permalink }) {
+// Multi-tab dedup: when a user has the chat open in multiple tabs/devices, all
+// tabs see the same Firestore onSnapshot event and would otherwise each fire
+// the webhook. We use a Firestore transaction on userSecrets/{uid}/webhookSent/{mid}
+// so only the first tab to claim the message sends. Phase A Cloud Function
+// replaces this with a single server-side dispatch.
+async function tryClaimWebhook(uid, messageId) {
+  if (!uid || !messageId) return false;
+  const ref = doc(db, "userSecrets", uid, "webhookSent", messageId);
+  try {
+    return await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (snap.exists()) return false;
+      tx.set(ref, { ts: serverTimestamp() });
+      return true;
+    });
+  } catch (err) {
+    console.warn("[webhook dedup] transaction failed", err);
+    return false;
+  }
+}
+
+async function forwardToWebhooks({ kind, ch, m, permalink }) {
   const w = getNotifPrefs().webhooks || {};
   const hasAny = w.slack || w.teams || w.discord;
   const isReply = !!m.isReply;
@@ -3090,6 +3111,10 @@ function forwardToWebhooks({ kind, ch, m, permalink }) {
     channel: ch.name || ch.id,
   });
   if (!hasAny || !pass) return;
+  if (!(await tryClaimWebhook(state.user?.uid, m.id))) {
+    console.log("[webhook dedup] skipped — another tab already claimed", m.id);
+    return;
+  }
   const chLabel = ch.type === "dm"
     ? `DM from ${m.authorName}`
     : (ch.type === "team" ? `🔒${ch.name}` : `#${ch.name}`);
