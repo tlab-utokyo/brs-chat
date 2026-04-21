@@ -97,6 +97,7 @@ const el = {
   btnToggleSidebar: $("btn-toggle-sidebar"),
   chatSidebar: $("chat-sidebar"),
   sidebarBackdrop: $("sidebar-backdrop"),
+  btnDeleteChannel: $("btn-delete-channel"),
   channelList: $("channel-list"),
   teamList: $("team-list"),
   dmList: $("dm-list"),
@@ -984,6 +985,12 @@ function selectChannel(channelId) {
   // Show member count + hide button for DMs (always 2 people, not useful)
   el.btnMembers.hidden = ch.type === "dm";
   el.memberCount.textContent = (ch.members || []).length || "";
+  // Show delete (archive) button only to creator or admin, and never for DM,
+  // #general, or explicitly-flagged default channels.
+  const isGeneral = (ch.name || "").toLowerCase() === GENERAL_CHANNEL_NAME;
+  const canDelete = !!state.user && ch.type !== "dm" && !ch.isDefault && !isGeneral &&
+    (ch.createdByUid === state.user.uid || isAdmin());
+  if (el.btnDeleteChannel) el.btnDeleteChannel.hidden = !canDelete;
   renderChannelLists();
   el.messagesList.innerHTML = "";
   el.messagesLoading.hidden = false;
@@ -1819,7 +1826,7 @@ el.formNewChannel.addEventListener("submit", async (e) => {
     el.newChannelError.hidden = false;
     return;
   }
-  if (state.channels.some((c) => c.name === name)) {
+  if (state.channels.some((c) => c.name === name && !c.archived)) {
     el.newChannelError.textContent = "A channel with that name already exists.";
     el.newChannelError.hidden = false;
     return;
@@ -2303,6 +2310,32 @@ el.btnToggleSidebar.addEventListener("click", () => {
   else openMobileSidebar();
 });
 el.sidebarBackdrop?.addEventListener("click", closeMobileSidebar);
+
+// ===========================================================================
+// Delete (archive) channel — creator + admin. Hides from sidebar, name can
+// be reused. Messages remain in Firestore for audit / future undelete.
+// ===========================================================================
+
+el.btnDeleteChannel?.addEventListener("click", async () => {
+  const cid = state.currentChannelId;
+  const ch = state.channels.find((c) => c.id === cid);
+  if (!ch) return;
+  const label = ch.type === "team" ? `🔒${ch.name}` : `#${ch.name}`;
+  const ok = confirm(
+    `Delete ${label}?\n\n` +
+    `• The channel disappears from everyone's sidebar.\n` +
+    `• Messages are not erased.\n` +
+    `• The name becomes free to reuse for a new channel.`
+  );
+  if (!ok) return;
+  try {
+    await updateDoc(doc(db, "channels", cid), { archived: true });
+    const fallback = state.channels.find((c) => c.id !== cid && !c.archived);
+    if (fallback) selectChannel(fallback.id);
+  } catch (err) {
+    alert("Delete failed: " + err.message);
+  }
+});
 
 // ===========================================================================
 // Mobile keyboard / visualViewport
