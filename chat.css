@@ -568,7 +568,8 @@ a.brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; b
   background: var(--surface);
 }
 .composer textarea {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0; /* without this the textarea refuses to shrink below ~200px, pushing Send offscreen on mobile */
   resize: none;
   max-height: 160px;
   line-height: 1.4;
