@@ -96,6 +96,7 @@ const el = {
   btnClearAvatar: $("btn-clear-avatar"),
   btnToggleSidebar: $("btn-toggle-sidebar"),
   chatSidebar: $("chat-sidebar"),
+  sidebarBackdrop: $("sidebar-backdrop"),
   channelList: $("channel-list"),
   teamList: $("team-list"),
   dmList: $("dm-list"),
@@ -267,6 +268,7 @@ const state = {
   typingWriteTimer: null,
   heartbeatTimer: null,
   pendingScrollToMsg: null,   // msg id to scroll-to after messages load (permalink)
+  forceScrollToBottom: false, // set true on channel switch so first render pins to latest message
   recentMessagesByChannel: new Map(),  // channelId -> array of recent message docs
   unreadMentionsByChannel: new Map(),  // channelId -> count of unread mentions for me
   draftsByChannel: new Map(),          // channelId -> in-progress composer text
@@ -986,9 +988,10 @@ function selectChannel(channelId) {
   el.messagesList.innerHTML = "";
   el.messagesLoading.hidden = false;
   el.messagesEmpty.hidden = true;
+  state.forceScrollToBottom = true;
 
   // Close mobile sidebar after selection.
-  el.chatSidebar.classList.remove("open");
+  closeMobileSidebar();
 
   subscribeMessages(channelId);
   subscribeTypingForCurrent();
@@ -1032,6 +1035,8 @@ function subscribeMessages(channelId) {
 
 function renderMessages(docs, channelId) {
   const wasAtBottom = isScrolledToBottom(el.messagesContainer);
+  const forceBottom = state.forceScrollToBottom;
+  if (forceBottom) state.forceScrollToBottom = false;
   el.messagesList.innerHTML = "";
   const q = (state.searchQuery || "").trim().toLowerCase();
   let matches = 0;
@@ -1046,7 +1051,9 @@ function renderMessages(docs, channelId) {
   if (q) {
     el.searchCount.textContent = matches + " match" + (matches === 1 ? "" : "es");
   }
-  if (wasAtBottom && !q) scrollToBottom(el.messagesContainer);
+  if ((forceBottom || wasAtBottom) && !q) {
+    requestAnimationFrame(() => scrollToBottom(el.messagesContainer));
+  }
 }
 
 function scrollToMessage(msgId) {
@@ -2283,9 +2290,19 @@ async function renderBrowseChannels() {
 // Sidebar toggle (mobile)
 // ===========================================================================
 
+function openMobileSidebar() {
+  el.chatSidebar.classList.add("open");
+  if (el.sidebarBackdrop) el.sidebarBackdrop.hidden = false;
+}
+function closeMobileSidebar() {
+  el.chatSidebar.classList.remove("open");
+  if (el.sidebarBackdrop) el.sidebarBackdrop.hidden = true;
+}
 el.btnToggleSidebar.addEventListener("click", () => {
-  el.chatSidebar.classList.toggle("open");
+  if (el.chatSidebar.classList.contains("open")) closeMobileSidebar();
+  else openMobileSidebar();
 });
+el.sidebarBackdrop?.addEventListener("click", closeMobileSidebar);
 
 // ===========================================================================
 // Mobile keyboard / visualViewport
