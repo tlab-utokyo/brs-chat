@@ -4,42 +4,44 @@
 
 :root {
   color-scheme: light;
-  --page-bg: #ffffff;
+  --page-bg: #fffaf8;          /* warm off-white base */
   --surface: #ffffff;
-  --surface-2: #f8f9fa;
-  --surface-3: #e9ecef;
-  --text-color: #333333;
-  --text-muted: #666666;
-  --border-color: #dddddd;
-  --shadow-color: rgba(0, 0, 0, 0.08);
-  --accent: #667eea;
-  --accent-2: #764ba2;
+  --surface-2: #fbf4f5;        /* faint rose-tinted hover */
+  --surface-3: #f3e2e4;
+  --text-color: #1a1416;
+  --text-muted: #6b5f62;
+  --border-color: #ecdcde;
+  --shadow-color: rgba(113, 0, 13, 0.09);
+  --accent: #8a0210;           /* Takeuchi Lab primary red */
+  --accent-2: #71000d;          /* deeper wine, used in gradients / active */
+  --accent-soft: #fdf0f2;       /* very pale rose — tints */
   --on-accent: #ffffff;
-  --danger: #c0392b;
-  --danger-bg: #fdecea;
-  --unread: #e74c3c;
-  --own-msg-bg: #eef2ff;
-  --link-color: #4c5ee0;
+  --danger: #c94f2d;            /* orange-red, distinct from brand */
+  --danger-bg: #fdf0e8;
+  --unread: #b71c2c;            /* brighter red for visibility */
+  --own-msg-bg: #fdf0f2;        /* pale rose for own messages */
+  --link-color: #8a0210;
 }
 
 [data-theme="dark"] {
   color-scheme: dark;
-  --page-bg: #0f1115;
-  --surface: #171c27;
-  --surface-2: #12151c;
-  --surface-3: #1f2633;
-  --text-color: #e6e8ee;
-  --text-muted: #a1a8b3;
-  --border-color: #2a3142;
-  --shadow-color: rgba(0, 0, 0, 0.5);
-  --accent: #667eea;
-  --accent-2: #8a66c8;
+  --page-bg: #120b0d;           /* near-black with wine tint */
+  --surface: #1c1114;
+  --surface-2: #15090c;
+  --surface-3: #2a1619;
+  --text-color: #f1ecee;
+  --text-muted: #a89ba0;
+  --border-color: #3a2229;
+  --shadow-color: rgba(0, 0, 0, 0.55);
+  --accent: #ef6b70;            /* lifted red for dark contrast */
+  --accent-2: #b91c1c;
+  --accent-soft: #2a1317;
   --on-accent: #ffffff;
-  --danger: #f28b82;
-  --danger-bg: #3b1b20;
-  --unread: #ff6b6b;
-  --own-msg-bg: #1e2440;
-  --link-color: #8da4ff;
+  --danger: #f09060;
+  --danger-bg: #3b1e15;
+  --unread: #ff7b85;
+  --own-msg-bg: #2a1317;
+  --link-color: #f28b8b;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -1141,13 +1143,113 @@ a.brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; b
   z-index: 400;
   max-width: min(80vw, 280px);
   padding: 6px 10px;
-  background: #222;
+  background: color-mix(in srgb, var(--accent-2) 92%, #000);
   color: #fff;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 12px;
   line-height: 1.4;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
   pointer-events: none;
   white-space: normal;
   word-break: break-word;
+}
+
+/* =====================================================================
+   Modern polish — subtle animations, glass surfaces, refined shadows.
+   Non-invasive overrides; removes easily by deleting this block.
+   ===================================================================== */
+
+/* Sticky header with glass effect */
+.chat-header {
+  backdrop-filter: saturate(180%) blur(10px);
+  -webkit-backdrop-filter: saturate(180%) blur(10px);
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+}
+
+/* Buttons: tactile press + glow on primary */
+.primary-btn, .secondary-btn, .icon-btn, .reaction-pill {
+  transition: background 0.18s ease, color 0.18s ease,
+              border-color 0.18s ease, transform 0.08s ease,
+              box-shadow 0.18s ease, opacity 0.18s ease;
+}
+.primary-btn:active, .secondary-btn:active,
+.icon-btn:active, .reaction-pill:active { transform: scale(0.96); }
+
+.primary-btn {
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 26%, transparent);
+}
+.primary-btn:hover {
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 36%, transparent);
+  transform: translateY(-1px);
+}
+
+/* Focus rings — brand-colored, clearly visible but soft */
+:where(button, a, input, textarea, summary, [role="button"]):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 75%, transparent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Messages: gentle entrance + hover breathing */
+.message {
+  transition: background 0.16s ease;
+  animation: msg-in 180ms ease-out;
+}
+.message:hover {
+  background: color-mix(in srgb, var(--accent-soft) 60%, transparent);
+}
+@keyframes msg-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Dialog / modal: soft glass backdrop + lift */
+dialog::backdrop {
+  background: color-mix(in srgb, var(--page-bg) 65%, transparent);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+dialog {
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  box-shadow: 0 24px 60px color-mix(in srgb, var(--accent-2) 18%, transparent),
+              0 2px 8px var(--shadow-color);
+}
+
+/* Sidebar: layered shadow + slight blur on mobile overlay */
+@media (max-width: 720px) {
+  .chat-sidebar {
+    backdrop-filter: saturate(160%) blur(10px);
+    -webkit-backdrop-filter: saturate(160%) blur(10px);
+    background: color-mix(in srgb, var(--surface) 90%, transparent);
+    box-shadow: 8px 0 28px color-mix(in srgb, var(--accent-2) 14%, transparent);
+  }
+  #sidebar-backdrop {
+    background: color-mix(in srgb, var(--accent-2) 16%, rgba(0,0,0,0.35));
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+  }
+}
+
+/* Custom scrollbar — subtle, brand-tinted */
+* { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--accent) 35%, transparent) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  background-clip: padding-box;
+}
+
+/* Reduced motion — respect user preference */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
 }
