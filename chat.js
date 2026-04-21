@@ -313,6 +313,42 @@ function escHtml(s) {
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
+// ---------------------------------------------------------------------------
+// Inline line icons (Lucide, MIT). Replaces emoji for a cleaner modern look.
+// `icon(name, { filled, size, className })` returns an SVG string. Color
+// inherits from currentColor; size defaults to 18px.
+// ---------------------------------------------------------------------------
+const LUCIDE_ICONS = {
+  menu: '<line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  trash: '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>',
+  "chevron-down": '<path d="m6 9 6 6 6-6"/>',
+  shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>',
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>',
+  pin: '<line x1="12" x2="12" y1="17" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>',
+  paperclip: '<path d="M13.234 20.252 21 12.3"/><path d="m16 6-8.414 8.586a2 2 0 0 0 0 2.828 2 2 0 0 0 2.828 0l8.414-8.586a4 4 0 0 0 0-5.656 4 4 0 0 0-5.656 0l-8.415 8.585a6 6 0 1 0 8.486 8.486"/>',
+  "smile-plus": '<path d="M22 11v1a10 10 0 1 1-9-10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" x2="9.01" y1="9" y2="9"/><line x1="15" x2="15.01" y1="9" y2="9"/><path d="M16 5h6"/><path d="M19 2v6"/>',
+  "message-square": '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  bookmark: '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  "bar-chart-3": '<path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+};
+function icon(name, opts = {}) {
+  const body = LUCIDE_ICONS[name];
+  if (!body) return "";
+  const size = opts.size || 18;
+  const cls = opts.className || "icon";
+  const fill = opts.filled ? "currentColor" : "none";
+  return `<svg class="${cls}" xmlns="http://www.w3.org/2000/svg" ` +
+    `width="${size}" height="${size}" viewBox="0 0 24 24" ` +
+    `fill="${fill}" stroke="currentColor" stroke-width="2" ` +
+    `stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+}
+
 // Simple URL linkifier + @mention renderer.
 function mentionSlug(name) {
   return (name || "").trim().split(/\s+/)[0].toLowerCase().replace(/[^a-z0-9_\-]/g, "");
@@ -1283,7 +1319,7 @@ function renderMessage(m, channelId) {
 
   const reactBtn = document.createElement("button");
   reactBtn.type = "button";
-  reactBtn.textContent = "😊+";
+  reactBtn.innerHTML = icon("smile-plus", { size: 16 });
   reactBtn.title = "Add reaction";
   reactBtn.addEventListener("click", (e) => openEmojiPicker(e.currentTarget, channelId, m));
   actions.appendChild(reactBtn);
@@ -1292,7 +1328,7 @@ function renderMessage(m, channelId) {
   if (m.parentId == null) {
     const replyBtn = document.createElement("button");
     replyBtn.type = "button";
-    replyBtn.textContent = "💬";
+    replyBtn.innerHTML = icon("message-square", { size: 16 });
     replyBtn.title = "Reply in thread";
     replyBtn.addEventListener("click", () => openThread(channelId, m.id));
     actions.appendChild(replyBtn);
@@ -1301,7 +1337,7 @@ function renderMessage(m, channelId) {
   // Pin / Unpin
   const pinBtn = document.createElement("button");
   pinBtn.type = "button";
-  pinBtn.textContent = m.pinned ? "📌✓" : "📌";
+  pinBtn.innerHTML = icon("pin", { size: 16, filled: m.pinned });
   pinBtn.title = m.pinned ? "Unpin" : "Pin to channel";
   pinBtn.addEventListener("click", () => togglePin(channelId, m));
   actions.appendChild(pinBtn);
@@ -1312,7 +1348,7 @@ function renderMessage(m, channelId) {
   );
   const saveBtn = document.createElement("button");
   saveBtn.type = "button";
-  saveBtn.textContent = isSaved ? "🔖✓" : "🔖";
+  saveBtn.innerHTML = icon("bookmark", { size: 16, filled: isSaved });
   saveBtn.title = isSaved ? "Unsave" : "Save for later";
   saveBtn.addEventListener("click", () => toggleSave(channelId, m));
   actions.appendChild(saveBtn);
@@ -1320,7 +1356,7 @@ function renderMessage(m, channelId) {
   // Copy permalink
   const linkBtn = document.createElement("button");
   linkBtn.type = "button";
-  linkBtn.textContent = "🔗";
+  linkBtn.innerHTML = icon("link", { size: 16 });
   linkBtn.title = "Copy link to message";
   linkBtn.addEventListener("click", () => copyPermalink(channelId, m.id));
   actions.appendChild(linkBtn);
@@ -2644,7 +2680,7 @@ function renderPollCard(channelId, m) {
   card.className = "poll-card";
   const q = document.createElement("div");
   q.className = "poll-question";
-  q.textContent = "📊 " + question;
+  q.innerHTML = icon("bar-chart-3", { size: 16 }) + " " + escHtml(question);
   card.appendChild(q);
   const total = options.reduce((sum, o) => sum + (o.votes || []).length, 0);
   options.forEach((opt, idx) => {

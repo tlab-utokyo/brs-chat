@@ -1137,6 +1137,19 @@ a.brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; b
   #sidebar-backdrop:not([hidden]) { display: block; }
 }
 
+/* ==== Lucide line icons ==== */
+.icon {
+  display: inline-block;
+  vertical-align: middle;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  stroke-width: 2;
+}
+button > .icon { pointer-events: none; }
+h2 > .icon, h3 > .icon { margin-right: 6px; }
+.pinned-toggle { display: inline-flex; align-items: center; gap: 6px; }
+
 /* ==== Long-press tooltip (mobile-friendly `title` replacement) ==== */
 .longpress-tooltip {
   position: absolute;
