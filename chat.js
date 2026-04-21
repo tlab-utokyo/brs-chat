@@ -813,10 +813,34 @@ function subscribeAdmins() {
 
 function subscribeUsers() {
   state.unsubUsers = onSnapshot(collection(db, "users"), (snap) => {
-    state.allUsers = snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
+    const next = snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
+    const profileChanged = didAnyProfileChange(state.allUsers || [], next);
+    state.allUsers = next;
+    // When someone edits their display name / photo, re-render the currently
+    // visible messages so the new profile info propagates to older messages
+    // (authorName/photoURL are denormalized onto each message but the render
+    // prefers the live cache from getUserByUid).
+    if (profileChanged && state.currentChannelId && state.currentMessages) {
+      renderMessages(state.currentMessages, state.currentChannelId);
+    }
   }, (err) => {
     console.warn("users subscription failed", err);
   });
+}
+
+// Compares the fields that affect rendered messages (displayName + photoURL).
+// Presence/heartbeat updates (lastSeenAt) are ignored to avoid re-rendering
+// the whole message list on every heartbeat.
+function didAnyProfileChange(prev, next) {
+  if (prev.length !== next.length) return true;
+  const prevMap = new Map(prev.map((u) => [u.uid, u]));
+  for (const n of next) {
+    const p = prevMap.get(n.uid);
+    if (!p) return true;
+    if (p.displayName !== n.displayName) return true;
+    if (p.photoURL !== n.photoURL) return true;
+  }
+  return false;
 }
 
 // --- Channels subscription ---
@@ -1078,6 +1102,61 @@ function scrollToBottom(container) {
   container.scrollTop = container.scrollHeight;
 }
 
+// ---------------------------------------------------------------------------
+// Long-press tooltip — mobile-friendly equivalent of the native `title` hover.
+// Tap = normal click behavior; press-and-hold ~500ms = show a tooltip bubble
+// with the provided text until the next tap anywhere.
+// ---------------------------------------------------------------------------
+function hideLongPressTooltip() {
+  document.querySelectorAll(".longpress-tooltip").forEach((t) => t.remove());
+}
+function showLongPressTooltipFor(anchor, text) {
+  hideLongPressTooltip();
+  if (!text) return;
+  const tip = document.createElement("div");
+  tip.className = "longpress-tooltip";
+  tip.textContent = text;
+  document.body.appendChild(tip);
+  const rect = anchor.getBoundingClientRect();
+  const top = Math.max(4, rect.top - tip.offsetHeight - 6) + window.scrollY;
+  const left = Math.max(4, Math.min(
+    window.innerWidth - tip.offsetWidth - 4,
+    rect.left,
+  )) + window.scrollX;
+  tip.style.top = `${top}px`;
+  tip.style.left = `${left}px`;
+  setTimeout(() => {
+    document.addEventListener("click", hideLongPressTooltip, { once: true });
+    document.addEventListener("touchstart", hideLongPressTooltip, { once: true, passive: true });
+  }, 0);
+}
+function attachLongPressTooltip(el, textFn) {
+  let timer = null;
+  let fired = false;
+  const start = () => {
+    fired = false;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      fired = true;
+      timer = null;
+      const txt = typeof textFn === "function" ? textFn() : textFn;
+      showLongPressTooltipFor(el, txt);
+    }, 500);
+  };
+  const cancel = () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+  };
+  el.addEventListener("touchstart", start, { passive: true });
+  el.addEventListener("touchend", cancel);
+  el.addEventListener("touchmove", cancel, { passive: true });
+  el.addEventListener("touchcancel", cancel);
+  // Suppress the follow-up click that iOS/Android dispatch after a long press
+  // so the reaction doesn't toggle when the user just wanted to see names.
+  el.addEventListener("click", (e) => {
+    if (fired) { e.stopImmediatePropagation(); e.preventDefault(); fired = false; }
+  }, true);
+}
+
 function renderMessage(m, channelId) {
   const li = document.createElement("li");
   li.className = "message";
@@ -1187,7 +1266,11 @@ function renderMessage(m, channelId) {
         pill.innerHTML = `<span>${key}</span><span class="reaction-count"></span>`;
       }
       pill.querySelector(".reaction-count").textContent = uids.length;
-      pill.title = uids.map((u) => getUserByUid(u)?.displayName || "?").join(", ");
+      const namesOf = () => uids
+        .map((u) => getUserByUid(u)?.displayName || "?")
+        .join(", ");
+      pill.title = namesOf();
+      attachLongPressTooltip(pill, namesOf);
       pill.addEventListener("click", () => toggleReaction(channelId, m, key, uids));
       wrap.appendChild(pill);
     }
@@ -2576,7 +2659,12 @@ function renderPollCard(channelId, m) {
       `<span><span class="poll-label"></span>` +
       `<span class="poll-count">${uids.length} · ${pct}%</span></span>`;
     btn.querySelector(".poll-label").textContent = opt.label;
-    btn.title = uids.map((u) => getUserByUid(u)?.displayName || "").filter(Boolean).join(", ");
+    const voterNames = () => uids
+      .map((u) => getUserByUid(u)?.displayName || "")
+      .filter(Boolean)
+      .join(", ");
+    btn.title = voterNames();
+    attachLongPressTooltip(btn, voterNames);
     btn.addEventListener("click", () => togglePollVote(channelId, m, idx));
     card.appendChild(btn);
   });

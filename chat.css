@@ -1130,3 +1130,20 @@ label small { display: block; color: var(--text-muted); font-size: 0.75rem; marg
 @media (max-width: 720px) {
   #sidebar-backdrop:not([hidden]) { display: block; }
 }
+
+/* ==== Long-press tooltip (mobile-friendly `title` replacement) ==== */
+.longpress-tooltip {
+  position: absolute;
+  z-index: 400;
+  max-width: min(80vw, 280px);
+  padding: 6px 10px;
+  background: #222;
+  color: #fff;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  white-space: normal;
+  word-break: break-word;
+}
