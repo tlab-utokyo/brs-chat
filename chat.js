@@ -552,7 +552,7 @@ el.formEmailSignin.addEventListener("submit", async (e) => {
     const url = window.location.origin + window.location.pathname;
     await sendSignInLinkToEmail(auth, email, { url, handleCodeInApp: true });
     window.localStorage.setItem(EMAIL_LINK_STORAGE_KEY, email);
-    el.emailStatus.textContent = `Sign-in link sent to ${email}. Check your inbox (and spam folder). Links expire in 60 minutes.`;
+    el.emailStatus.textContent = `Sign-in link sent to ${email} from noreply@biohybrid-robotics.com. Check your inbox — and the spam / junk folder if it doesn't show up. Links expire in 60 minutes.`;
   } catch (err) {
     console.error(err);
     el.emailStatus.textContent = "";
