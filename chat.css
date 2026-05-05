@@ -1126,19 +1126,24 @@ a.brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; b
 }
 
 /* Search field at the top of the member picker (New DM / New Team dialogs).
-   Auto-appears when the candidate list is 5+ people. */
+   Auto-appears when the candidate list is 5+ people. Sticky so it stays
+   visible while the candidate list below scrolls. */
 .member-picker-search {
   display: block;
   width: 100%;
   margin: 0 0 8px;
-  padding: 8px 12px;
+  padding: 9px 14px 9px 32px;
   font: inherit;
   font-size: 0.95rem;
-  background: var(--surface-2);
+  background: var(--surface-2)
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='8'/><path d='m21 21-4.35-4.35'/></svg>") 10px center / 14px no-repeat;
   border: 1px solid var(--border-color);
   border-radius: 6px;
   color: var(--text-color);
   box-sizing: border-box;
+  position: sticky;
+  top: 0;
+  z-index: 2;
 }
 .member-picker-search:focus { outline: none; border-color: var(--accent); }
 .member-picker-search::placeholder { color: var(--text-muted); }
