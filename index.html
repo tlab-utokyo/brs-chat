@@ -397,10 +397,40 @@
           While you have BRS Community open in any tab, matching events are forwarded there —
           so your phone's Slack/Teams/Discord app rings you.
         </p>
+
+        <details class="webhook-help">
+          <summary>📖 How to set up Slack (private channel for yourself)</summary>
+          <ol class="webhook-help-steps">
+            <li>In your Slack workspace, create a <strong>private channel</strong> just for yourself (e.g. <code>#brs-notifications</code>) so only you see the forwarded messages.</li>
+            <li>Open <a href="https://my.slack.com/services/new/incoming-webhook" target="_blank" rel="noopener noreferrer">my.slack.com/services/new/incoming-webhook</a>. Choose your private channel and click <em>Add Incoming WebHooks integration</em>.</li>
+            <li>Copy the <strong>Webhook URL</strong> (starts with <code>https://hooks.slack.com/services/…</code>) and paste it below.</li>
+            <li>Save, then click <em>Test</em> below to confirm a message lands in your private Slack channel.</li>
+          </ol>
+          <p class="hint" style="margin-top:6px">If your workspace blocks legacy Incoming WebHooks, ask your admin to install the <em>Incoming WebHooks</em> app from the App Directory and post in your channel — the URL ends up the same.</p>
+        </details>
+
+        <details class="webhook-help">
+          <summary>📖 How to set up Microsoft Teams</summary>
+          <ol class="webhook-help-steps">
+            <li>In Teams, pick (or create) a channel just for yourself.</li>
+            <li>Click the channel's <em>•••</em> menu → <em>Connectors</em> → search <strong>Incoming Webhook</strong> → <em>Add</em> → <em>Configure</em>.</li>
+            <li>Give it a name (e.g. <code>BRS Chat</code>), upload an icon if you want, then click <em>Create</em>.</li>
+            <li>Copy the URL and paste it below. Save, then Test.</li>
+          </ol>
+        </details>
+
+        <details class="webhook-help">
+          <summary>📖 How to set up Discord</summary>
+          <ol class="webhook-help-steps">
+            <li>In Discord, create a private channel only you can see (Server Settings → Roles, or use a personal server).</li>
+            <li>Channel <em>Edit Channel</em> → <em>Integrations</em> → <em>Webhooks</em> → <em>New Webhook</em>.</li>
+            <li>Click <em>Copy Webhook URL</em> and paste it below. Save, then Test.</li>
+          </ol>
+        </details>
+
         <label>
           Slack webhook URL
           <input type="url" id="webhook-slack" placeholder="https://hooks.slack.com/services/…" maxlength="500">
-          <small><a href="https://api.slack.com/messaging/webhooks" target="_blank" rel="noopener noreferrer">How to create one</a></small>
         </label>
         <label>
           Microsoft Teams webhook URL
