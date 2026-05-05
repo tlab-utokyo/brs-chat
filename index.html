@@ -272,6 +272,12 @@
         <button type="button" id="btn-add-admin" class="secondary-btn" style="width:auto; padding:6px 14px; margin-top:6px">Add</button>
       </fieldset>
 
+      <fieldset class="notif-group">
+        <legend>Banned users</legend>
+        <p class="hint">Banned users are signed out, removed from every channel, and blocked from signing back in. Unban to restore access (they auto-rejoin #general on next sign-in; other channels need re-invite).</p>
+        <div id="bans-list"></div>
+      </fieldset>
+
       <div class="dialog-actions">
         <button type="button" id="btn-admin-close" class="primary-btn">Close</button>
       </div>
@@ -491,6 +497,25 @@
     </form>
   </dialog>
 
+  <!-- View someone's profile (read-only). Click any avatar/name to open. -->
+  <dialog id="dialog-user-profile" class="dialog user-profile-dialog">
+    <button type="button" class="dialog-close" data-close-dialog="dialog-user-profile" aria-label="Close">×</button>
+    <form method="dialog" novalidate>
+      <div class="user-profile-card">
+        <div id="user-profile-avatar" class="user-profile-avatar"></div>
+        <h2 id="user-profile-name"></h2>
+        <p id="user-profile-online" class="user-profile-presence"></p>
+        <p id="user-profile-affiliation" class="user-profile-affiliation"></p>
+        <p id="user-profile-email" class="user-profile-email"></p>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" id="btn-user-profile-dm" class="secondary-btn">Send DM</button>
+        <button type="button" id="btn-user-profile-edit" class="secondary-btn" hidden>Edit profile</button>
+        <button type="button" id="btn-user-profile-close" class="primary-btn">Close</button>
+      </div>
+    </form>
+  </dialog>
+
   <!-- Add custom reaction dialog -->
   <dialog id="dialog-new-reaction" class="dialog">
     <button type="button" class="dialog-close" data-close-dialog="dialog-new-reaction" aria-label="Close">×</button>
@@ -523,10 +548,12 @@
     <button type="button" class="dialog-close" data-close-dialog="dialog-new-dm" aria-label="Close">×</button>
     <form id="form-new-dm" method="dialog" novalidate>
       <h2>Start a direct message</h2>
-      <p class="hint">Select someone to chat with one-on-one.</p>
+      <p class="hint">Pick 1 person for a 1:1 DM, or 2+ to start a group DM.</p>
       <div id="dm-member-list" class="member-picker-list"></div>
+      <p id="new-dm-error" class="error" hidden></p>
       <div class="dialog-actions">
         <button type="button" id="btn-new-dm-cancel">Cancel</button>
+        <button type="button" id="btn-new-dm-start" class="primary-btn">Start</button>
       </div>
     </form>
   </dialog>

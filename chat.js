@@ -125,6 +125,8 @@ const el = {
   formNewDm: $("form-new-dm"),
   dmMemberList: $("dm-member-list"),
   btnNewDmCancel: $("btn-new-dm-cancel"),
+  btnNewDmStart: $("btn-new-dm-start"),
+  newDmError: $("new-dm-error"),
   dialogNewReaction: $("dialog-new-reaction"),
   formNewReaction: $("form-new-reaction"),
   inputReactionEmoji: $("input-reaction-emoji"),
@@ -173,6 +175,17 @@ const el = {
   btnAddAdmin: $("btn-add-admin"),
   btnAdminClose: $("btn-admin-close"),
   adminError: $("admin-error"),
+  bansList: $("bans-list"),
+  // User profile (view) dialog
+  dialogUserProfile: $("dialog-user-profile"),
+  userProfileAvatar: $("user-profile-avatar"),
+  userProfileName: $("user-profile-name"),
+  userProfileOnline: $("user-profile-online"),
+  userProfileAffiliation: $("user-profile-affiliation"),
+  userProfileEmail: $("user-profile-email"),
+  btnUserProfileDm: $("btn-user-profile-dm"),
+  btnUserProfileEdit: $("btn-user-profile-edit"),
+  btnUserProfileClose: $("btn-user-profile-close"),
   dialogBookmarks: $("dialog-bookmarks"),
   bookmarksList: $("bookmarks-list"),
   btnBookmarksClose: $("btn-bookmarks-close"),
@@ -277,10 +290,32 @@ const state = {
   unsubSecrets: null,
   adminEmails: [],            // from config/admins.emails
   unsubAdmins: null,
+  bans: { uids: [], emails: [] }, // from config/bans
+  unsubBans: null,
+  showHiddenDms: false,        // toggle: include user-hidden DMs in sidebar
 };
 
 function isAdmin() {
   return state.user && state.adminEmails.includes((state.user.email || "").toLowerCase());
+}
+
+function isBanned() {
+  if (!state.user) return false;
+  const email = (state.user.email || "").toLowerCase();
+  return (state.bans.uids || []).includes(state.user.uid) ||
+         (state.bans.emails || []).includes(email);
+}
+
+// True if this message should be invisible to the current user. Admin-hidden
+// messages are silently filtered out for non-admins (no placeholder shown);
+// admins still see the original with strikethrough + Restore.
+function isHiddenForViewer(m) {
+  if (!m || !m.deleted) return false;
+  if (m.deletedByUid && m.deletedByUid !== m.authorUid) {
+    // Hidden by admin — only admins can see it.
+    return !isAdmin();
+  }
+  return false;
 }
 
 // Base tab title, preserved so the unread badge can prefix it.
@@ -724,6 +759,31 @@ onAuthStateChanged(auth, async (user) => {
     }
   }
 
+  // Ban check (Phase 0: client-side; Phase A: also enforced in beforeSignIn).
+  // Read config/bans once before any UI shows, so banned users see only the
+  // sign-in screen with an explanation.
+  try {
+    const bansSnap = await getDoc(doc(db, "config", "bans"));
+    const bansData = bansSnap.data() || {};
+    state.bans = {
+      uids: Array.isArray(bansData.uids) ? bansData.uids : [],
+      emails: Array.isArray(bansData.emails)
+        ? bansData.emails.map((e) => (e || "").toLowerCase()).filter(Boolean)
+        : [],
+    };
+    if (isBanned()) {
+      await signOut(auth);
+      showSigninError(
+        "Your account has been removed from BRS Chat by an administrator. " +
+        "Contact the organizers if you think this is a mistake."
+      );
+      return;
+    }
+  } catch (e) {
+    // Non-fatal: if config/bans doesn't exist yet, treat as no bans.
+    console.warn("ban check failed (treating as no bans)", e);
+  }
+
   // Load or create profile.
   const userRef = doc(db, "users", user.uid);
   const snap = await getDoc(userRef);
@@ -799,6 +859,7 @@ function initChat() {
   subscribeChannels();
   subscribeCustomReactions();
   subscribeAdmins();
+  subscribeBans();
   initNotifications();
 }
 
@@ -812,6 +873,8 @@ function teardownChatSubscriptions() {
   state.userSecrets = null;
   if (state.unsubAdmins) { state.unsubAdmins(); state.unsubAdmins = null; }
   state.adminEmails = [];
+  if (state.unsubBans) { state.unsubBans(); state.unsubBans = null; }
+  state.bans = { uids: [], emails: [] };
   tearDownChannelNotifyListeners();
   if (state.unsubTyping) { state.unsubTyping(); state.unsubTyping = null; }
   stopHeartbeat();
@@ -834,14 +897,57 @@ function subscribeCustomReactions() {
 function subscribeAdmins() {
   if (state.unsubAdmins) { state.unsubAdmins(); state.unsubAdmins = null; }
   state.unsubAdmins = onSnapshot(doc(db, "config", "admins"), (snap) => {
+    const wasAdmin = isAdmin();
     const emails = (snap.data()?.emails || []).map((e) => (e || "").toLowerCase()).filter(Boolean);
     state.adminEmails = emails;
     // Toggle visibility of admin menu entry.
     if (el.btnAdminPanel) el.btnAdminPanel.hidden = !isAdmin();
     if (el.dialogMembers?.open) renderMembersDialog();
     if (el.dialogAdmin?.open) renderAdminDialog();
+    // If my admin status flipped, re-render messages so admin-hidden ones
+    // appear/disappear from view accordingly.
+    if (wasAdmin !== isAdmin() && state.currentChannelId && state.currentMessages) {
+      renderMessages(state.currentMessages, state.currentChannelId);
+    }
   }, (err) => {
     console.warn("admins subscription failed", err);
+  });
+}
+
+// Bans — list of uids + emails that are blocked from BRS Chat.
+// In Phase 0 (no blocking function), this is enforced client-side: on sign-in
+// we read this doc and force-signOut any banned user, then ensureJoinedGeneral
+// also bails out. In Phase A, beforeSignIn will check the same doc server-side
+// (this client check stays as defense-in-depth).
+function subscribeBans() {
+  if (state.unsubBans) { state.unsubBans(); state.unsubBans = null; }
+  state.unsubBans = onSnapshot(doc(db, "config", "bans"), async (snap) => {
+    const data = snap.data() || {};
+    state.bans = {
+      uids: Array.isArray(data.uids) ? data.uids : [],
+      emails: Array.isArray(data.emails)
+        ? data.emails.map((e) => (e || "").toLowerCase()).filter(Boolean)
+        : [],
+    };
+    // If I just got banned (live, while signed in), force sign out.
+    if (isBanned()) {
+      console.warn("Banned account detected — signing out");
+      try { await signOut(auth); } catch (_) {}
+      showSigninError(
+        "Your account has been removed from BRS Chat by an administrator. " +
+        "Contact the organizers if you think this is a mistake."
+      );
+      return;
+    }
+    if (el.dialogAdmin?.open) renderAdminDialog();
+    // Re-render so banned authors' avatars become non-clickable and any
+    // orphan DMs (partner just got banned) get filtered out of the sidebar.
+    renderChannelLists();
+    if (state.currentChannelId && state.currentMessages) {
+      renderMessages(state.currentMessages, state.currentChannelId);
+    }
+  }, (err) => {
+    console.warn("bans subscription failed", err);
   });
 }
 
@@ -851,6 +957,12 @@ function subscribeUsers() {
   state.unsubUsers = onSnapshot(collection(db, "users"), (snap) => {
     const next = snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
     const profileChanged = didAnyProfileChange(state.allUsers || [], next);
+    // Also detect my own hiddenDms changing so we can refresh the sidebar.
+    const myUid = state.user?.uid;
+    const oldMine = (state.allUsers || []).find((u) => u.uid === myUid);
+    const newMine = next.find((u) => u.uid === myUid);
+    const hiddenChanged = JSON.stringify(oldMine?.hiddenDms || []) !==
+                         JSON.stringify(newMine?.hiddenDms || []);
     state.allUsers = next;
     // When someone edits their display name / photo, re-render the currently
     // visible messages so the new profile info propagates to older messages
@@ -859,6 +971,7 @@ function subscribeUsers() {
     if (profileChanged && state.currentChannelId && state.currentMessages) {
       renderMessages(state.currentMessages, state.currentChannelId);
     }
+    if (hiddenChanged) renderChannelLists();
   }, (err) => {
     console.warn("users subscription failed", err);
   });
@@ -935,13 +1048,121 @@ function renderChannelLists() {
   const dms = [];
   for (const ch of state.channels) {
     if (ch.archived) continue;
-    if (ch.type === "dm") dms.push(ch);
+    if (ch.type === "dm") {
+      // Hide orphaned DMs: every other party is gone (banned/removed) or the
+      // members array is degenerate. Without this they show up as "(dm)".
+      if (isOrphanDm(ch)) {
+        leaveOrphanDm(ch);  // self-heal: remove me from members so it's gone for good
+        continue;
+      }
+      dms.push(ch);
+    }
     else if (ch.type === "team") teams.push(ch);
     else pub.push(ch);
   }
+  // DMs sorted by recent activity (lastMessageAt desc, fallback createdAt).
+  // Public/team channels stay in creation order so #general etc. don't move.
+  dms.sort((a, b) => {
+    const am = (a.lastMessageAt || a.createdAt)?.toMillis?.() ?? 0;
+    const bm = (b.lastMessageAt || b.createdAt)?.toMillis?.() ?? 0;
+    return bm - am;
+  });
+  // Split user-hidden DMs out so they only appear when the user has expanded
+  // the "Show hidden" toggle.
+  const hiddenSet = new Set(getMyHiddenDms());
+  const visibleDms = [];
+  const hiddenDms = [];
+  for (const ch of dms) {
+    if (hiddenSet.has(ch.id)) hiddenDms.push(ch);
+    else visibleDms.push(ch);
+  }
   renderChannelSection(el.channelList, pub, "public");
   renderChannelSection(el.teamList, teams, "team");
-  renderChannelSection(el.dmList, dms, "dm");
+  renderChannelSection(el.dmList, visibleDms, "dm");
+  renderHiddenDmsFooter(hiddenDms);
+}
+
+// Append a "Show N hidden DMs" / "Hide hidden DMs" toggle plus the hidden
+// rows themselves (when expanded) to the bottom of the DM section.
+function renderHiddenDmsFooter(hiddenDms) {
+  if (!el.dmList) return;
+  if (hiddenDms.length === 0) return;
+  const footer = document.createElement("li");
+  footer.className = "hidden-dms-toggle";
+  footer.textContent = state.showHiddenDms
+    ? `Hide ${hiddenDms.length} hidden`
+    : `Show ${hiddenDms.length} hidden`;
+  footer.addEventListener("click", () => {
+    state.showHiddenDms = !state.showHiddenDms;
+    renderChannelLists();
+  });
+  el.dmList.appendChild(footer);
+  if (state.showHiddenDms) {
+    for (const ch of hiddenDms) {
+      const row = renderDmRow(ch, /* hidden= */ true);
+      el.dmList.appendChild(row);
+    }
+  }
+}
+
+// Single DM row used by both the visible section (via renderChannelSection)
+// and the expanded "hidden" group. Pulled out for symmetry.
+function renderDmRow(ch, hidden) {
+  const li = document.createElement("li");
+  li.dataset.channelId = ch.id;
+  if (hidden) li.classList.add("hidden-dm");
+  if (ch.id === state.currentChannelId) li.classList.add("active");
+  const others = getDmOthers(ch);
+  const dmUser = others[0] || null;
+  const label = dmLabel(ch);
+  if (dmUser) li.appendChild(renderAvatar(dmUser, "xs"));
+  const nameWrap = document.createElement("span");
+  nameWrap.className = "dm-name";
+  const nameEl = document.createElement("span");
+  nameEl.className = "channel-name";
+  nameEl.textContent = label;
+  nameWrap.appendChild(nameEl);
+  if (others.length > 1) {
+    nameWrap.insertAdjacentHTML("beforeend",
+      `<span class="group-dm-icon" aria-label="group">👥</span>`);
+  }
+  li.appendChild(nameWrap);
+  // Hide / Unhide button (× for visible, ↶ for hidden).
+  const xBtn = document.createElement("button");
+  xBtn.type = "button";
+  xBtn.className = "dm-hide-btn";
+  xBtn.textContent = hidden ? "↶" : "×";
+  xBtn.title = hidden ? "Unhide this DM" : "Hide this DM";
+  xBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (hidden) unhideDm(ch.id); else hideDm(ch.id);
+  });
+  li.appendChild(xBtn);
+  li.addEventListener("click", () => selectChannel(ch.id));
+  return li;
+}
+
+function isOrphanDm(ch) {
+  if (ch?.type !== "dm") return false;
+  const members = ch.members || [];
+  if (members.length < 2) return true;  // only me left
+  const others = members.filter((u) => u !== state.user.uid);
+  if (others.length === 0) return true;
+  // For group DMs, only orphan when EVERY other member is banned/missing.
+  // (A 5-person group with 1 banned still works fine for the other 4.)
+  if (others.every((u) => isUserBanned(u))) return true;
+  return false;
+}
+
+const orphanDmCleanupAttempted = new Set();
+function leaveOrphanDm(ch) {
+  if (orphanDmCleanupAttempted.has(ch.id)) return;
+  orphanDmCleanupAttempted.add(ch.id);
+  // Remove self from the channel so subscribeChannels (where members
+  // array-contains me) drops it from state.channels permanently.
+  updateDoc(doc(db, "channels", ch.id), {
+    members: arrayRemove(state.user.uid),
+  }).catch((e) => console.warn("orphan DM cleanup failed", e));
 }
 
 function renderChannelSection(container, channels, kind) {
@@ -956,9 +1177,14 @@ function renderChannelSection(container, channels, kind) {
     let lock = "";
     let dmUser = null;
     if (kind === "dm") {
-      dmUser = getDmOtherUser(ch);
-      label = dmUser ? (dmUser.displayName || dmUser.email || "(unknown)") : "(dm)";
+      const others = getDmOthers(ch);
+      dmUser = others[0] || null;  // for the avatar slot
+      label = dmLabel(ch);
       prefix = "";
+      // Group DM marker — small icon next to the name.
+      if (others.length > 1) {
+        lock = `<span class="group-dm-icon" aria-label="group">👥</span>`;
+      }
     } else if (kind === "team") {
       lock = `<span class="lock-icon" aria-label="private">🔒</span>`;
     }
@@ -1001,6 +1227,20 @@ function renderChannelSection(container, channels, kind) {
       li.querySelector(".unread-badge").hidden = true;
     }
 
+    // × hide button — only on DM rows. Hover-only so it doesn't clutter.
+    if (kind === "dm") {
+      const xBtn = document.createElement("button");
+      xBtn.type = "button";
+      xBtn.className = "dm-hide-btn";
+      xBtn.textContent = "×";
+      xBtn.title = "Hide this DM";
+      xBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        hideDm(ch.id);
+      });
+      li.appendChild(xBtn);
+    }
+
     li.addEventListener("click", () => selectChannel(ch.id));
     container.appendChild(li);
   }
@@ -1009,6 +1249,53 @@ function renderChannelSection(container, channels, kind) {
 function getDmOtherUser(ch) {
   const otherUid = (ch.members || []).find((u) => u !== state.user.uid);
   return state.allUsers.find((u) => u.uid === otherUid);
+}
+
+// All other members of a DM channel (excludes self). For group DMs (3+ people).
+function getDmOthers(ch) {
+  return (ch.members || [])
+    .filter((u) => u !== state.user.uid)
+    .map((u) => state.allUsers.find((x) => x.uid === u))
+    .filter(Boolean);
+}
+
+// User-managed hide list — DMs the user clicked × on. Stored on
+// users/{uid}.hiddenDms. Hiding only affects this user's sidebar; the
+// channel doc + history are untouched and the other party is unaffected.
+function getMyHiddenDms() {
+  const me = getUserByUid(state.user?.uid);
+  return Array.isArray(me?.hiddenDms) ? me.hiddenDms : [];
+}
+
+async function hideDm(channelId) {
+  if (!state.user) return;
+  try {
+    await updateDoc(doc(db, "users", state.user.uid), {
+      hiddenDms: arrayUnion(channelId),
+    });
+  } catch (err) {
+    alert("Hide failed: " + err.message);
+  }
+}
+
+async function unhideDm(channelId) {
+  if (!state.user) return;
+  try {
+    await updateDoc(doc(db, "users", state.user.uid), {
+      hiddenDms: arrayRemove(channelId),
+    });
+  } catch (err) {
+    alert("Unhide failed: " + err.message);
+  }
+}
+
+// Comma-joined display label for a DM channel (works for 1:1 and group DMs).
+function dmLabel(ch) {
+  const others = getDmOthers(ch);
+  if (others.length === 0) return "(dm)";
+  if (others.length === 1) return others[0].displayName || others[0].email || "(unknown)";
+  const names = others.slice(0, 3).map((u) => u.displayName || u.email || "?").join(", ");
+  return others.length > 3 ? `${names} +${others.length - 3}` : names;
 }
 
 function tsGt(a, b) {
@@ -1034,16 +1321,17 @@ function selectChannel(channelId) {
   let titleText = ch.name;
   let titlePrefix = "#";
   if (ch.type === "dm") {
-    const other = getDmOtherUser(ch);
-    titleText = other ? (other.displayName || other.email || "(unknown)") : "(dm)";
-    titlePrefix = "@";
+    titleText = dmLabel(ch);
+    titlePrefix = getDmOthers(ch).length > 1 ? "" : "@";
   }
   el.currentChannelName.textContent = titleText;
   const titleHash = document.querySelector(".chat-title .channel-hash");
   if (titleHash) titleHash.textContent = titlePrefix;
   el.inputMessage.placeholder = `Message ${titlePrefix}${titleText} · Ctrl+Enter to send`;
-  // Show member count + hide button for DMs (always 2 people, not useful)
-  el.btnMembers.hidden = ch.type === "dm";
+  // Hide Members button for 1:1 DMs (always 2 people, not useful) but show
+  // it for group DMs (3+) so members can be added/removed.
+  const isGroupDm = ch.type === "dm" && (ch.members || []).length > 2;
+  el.btnMembers.hidden = ch.type === "dm" && !isGroupDm;
   el.memberCount.textContent = (ch.members || []).length || "";
   // Show delete (archive) button only to creator or admin, and never for DM,
   // #general, or explicitly-flagged default channels.
@@ -1108,6 +1396,7 @@ function renderMessages(docs, channelId) {
   const q = (state.searchQuery || "").trim().toLowerCase();
   let matches = 0;
   for (const m of docs) {
+    if (isHiddenForViewer(m)) continue;
     if (q) {
       const hay = ((m.text || "") + " " + (m.authorName || "")).toLowerCase();
       if (!hay.includes(q)) continue;
@@ -1198,8 +1487,7 @@ function renderMessage(m, channelId) {
   li.className = "message";
   li.dataset.messageId = m.id;
   const isOwn = m.authorUid === state.user.uid;
-  const isAdmin = !!state.user && !!state.userDoc &&
-    !!(auth.currentUser && auth.currentUser.getIdTokenResult);  // claim checked in rules
+  const admin = isAdmin();
   if (isOwn) li.classList.add("own");
   if (m.deleted) li.classList.add("deleted");
 
@@ -1209,7 +1497,15 @@ function renderMessage(m, channelId) {
     uid: m.authorUid, displayName: m.authorName,
     photoURL: m.authorPhotoURL, email: m.authorEmail,
   };
-  li.appendChild(renderAvatar(authorUser));
+  // Banned users' avatar/name are not clickable — can't open profile or DM.
+  const authorClickable = !!m.authorUid && !isUserBanned(m.authorUid);
+  const avatarEl = renderAvatar(authorUser);
+  if (authorClickable) {
+    avatarEl.classList.add("clickable");
+    avatarEl.title = "View profile";
+    avatarEl.addEventListener("click", () => showUserProfile(m.authorUid));
+  }
+  li.appendChild(avatarEl);
 
   const body = document.createElement("div");
   body.className = "message-body";
@@ -1218,7 +1514,7 @@ function renderMessage(m, channelId) {
   const meta = document.createElement("div");
   meta.className = "message-meta";
   meta.innerHTML =
-    `<span class="message-author"></span>` +
+    `<span class="message-author${authorClickable ? ' clickable' : ''}"></span>` +
     `<span class="message-affiliation"></span>` +
     `<span class="message-time"></span>` +
     (m.editedAt ? `<span class="message-edited">(edited)</span>` : "");
@@ -1229,7 +1525,12 @@ function renderMessage(m, channelId) {
   const displayName = liveUser?.displayName || m.authorName || "unknown";
   const affiliation = liveUser?.affiliation ?? m.authorAffiliation ?? "";
   const email = liveUser?.email || m.authorEmail || "";
-  meta.querySelector(".message-author").textContent = displayName;
+  const authorEl = meta.querySelector(".message-author");
+  authorEl.textContent = displayName;
+  if (m.authorUid) {
+    authorEl.title = "View profile";
+    authorEl.addEventListener("click", () => showUserProfile(m.authorUid));
+  }
   if (affiliation) meta.querySelector(".message-affiliation").textContent = affiliation;
   meta.querySelector(".message-time").textContent = formatTime(m.createdAt);
   // Email shown as tooltip so users can verify identity even after a rename.
@@ -1237,10 +1538,27 @@ function renderMessage(m, channelId) {
   body.appendChild(meta);
 
   if (m.deleted) {
-    const stub = document.createElement("div");
-    stub.textContent = "(deleted)";
-    body.appendChild(stub);
-    return li;
+    // Two flavors:
+    //  - "hidden by admin" (m.deletedByUid set, ≠ author) — text preserved so
+    //    admin can Restore later. Non-admins see only the placeholder.
+    //  - "deleted by author" (no deletedByUid, or === author) — gone for
+    //    everyone (currently a hard delete, so this branch shouldn't fire).
+    const hiddenByAdmin = m.deletedByUid && m.deletedByUid !== m.authorUid;
+    if (!admin || !hiddenByAdmin) {
+      const stub = document.createElement("div");
+      stub.className = "deleted-stub";
+      stub.textContent = hiddenByAdmin ? "(hidden by admin)" : "(deleted)";
+      body.appendChild(stub);
+      return li;
+    }
+    // Admin viewing an admin-hidden message: render full content faded so
+    // they can decide to Restore. Non-admins are blocked above.
+    const note = document.createElement("div");
+    note.className = "deleted-stub";
+    note.textContent = "(hidden by admin — only admins see the original)";
+    body.appendChild(note);
+    // fall through to the normal text/poll/etc. rendering, with the .deleted
+    // class on <li> applying muted + strikethrough styling.
   }
 
   // Poll message?
@@ -1370,19 +1688,44 @@ function renderMessage(m, channelId) {
 
   const now = Date.now();
   const createdMs = m.createdAt?.toMillis?.() ?? 0;
-  if (isOwn && m.text && (now - createdMs) < 5 * 60 * 1000) {
+  if (isOwn && m.text && !m.deleted && (now - createdMs) < 5 * 60 * 1000) {
     const editBtn = document.createElement("button");
     editBtn.type = "button";
     editBtn.textContent = "Edit";
     editBtn.addEventListener("click", () => editMessage(channelId, m));
     actions.appendChild(editBtn);
   }
-  if (isOwn) {
+  // Delete:
+  //  - Owner: hard-delete their own message (any time).
+  //  - Admin (on someone else's message): soft-hide (preserves text so it
+  //    can be Restored later by another admin).
+  if (isOwn && !m.deleted) {
     const delBtn = document.createElement("button");
     delBtn.type = "button";
     delBtn.textContent = "Delete";
     delBtn.addEventListener("click", () => deleteMessage(channelId, m));
     actions.appendChild(delBtn);
+  } else if (admin && !isOwn && !m.deleted) {
+    const hideBtn = document.createElement("button");
+    hideBtn.type = "button";
+    hideBtn.textContent = "Hide";
+    hideBtn.title = "Hide this message from non-admins (reversible)";
+    hideBtn.addEventListener("click", () => hideMessage(channelId, m));
+    actions.appendChild(hideBtn);
+  } else if (admin && m.deleted && m.deletedByUid && m.deletedByUid !== m.authorUid) {
+    // Hidden by admin — show Restore + permanent-delete buttons.
+    const restoreBtn = document.createElement("button");
+    restoreBtn.type = "button";
+    restoreBtn.textContent = "Restore";
+    restoreBtn.title = "Make this message visible to everyone again";
+    restoreBtn.addEventListener("click", () => restoreMessage(channelId, m));
+    actions.appendChild(restoreBtn);
+    const purgeBtn = document.createElement("button");
+    purgeBtn.type = "button";
+    purgeBtn.textContent = "Delete permanently";
+    purgeBtn.title = "Hard-delete this message — cannot be undone";
+    purgeBtn.addEventListener("click", () => purgeMessage(channelId, m));
+    actions.appendChild(purgeBtn);
   }
   body.appendChild(actions);
 
@@ -1560,6 +1903,57 @@ async function deleteMessage(channelId, m) {
     await deleteDoc(msgDocRef(channelId, m));
   } catch (err) {
     alert("Delete failed: " + err.message);
+  }
+}
+
+// Admin: hide someone else's message. Soft-delete — text is preserved on the
+// document so another admin can Restore it later. Non-admin clients see only
+// "(hidden by admin)".
+async function hideMessage(channelId, m) {
+  if (!isAdmin()) return;
+  if (m.authorUid === state.user.uid) return;  // own messages use deleteMessage
+  if (!window.confirm(
+    `Hide this message by ${m.authorName}?\n\n` +
+    `Non-admins will see "(hidden by admin)" in its place. ` +
+    `Admins still see the original and can Restore it.`
+  )) return;
+  try {
+    await updateDoc(msgDocRef(channelId, m), {
+      deleted: true,
+      deletedByUid: state.user.uid,
+      deletedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    alert("Hide failed: " + err.message);
+  }
+}
+
+// Admin: restore a previously hidden message.
+async function restoreMessage(channelId, m) {
+  if (!isAdmin()) return;
+  if (!window.confirm("Restore this message? It will be visible to everyone again.")) return;
+  try {
+    await updateDoc(msgDocRef(channelId, m), {
+      deleted: false,
+      deletedByUid: deleteField(),
+      deletedAt: deleteField(),
+    });
+  } catch (err) {
+    alert("Restore failed: " + err.message);
+  }
+}
+
+// Admin: permanently delete a hidden message (no recovery).
+async function purgeMessage(channelId, m) {
+  if (!isAdmin()) return;
+  if (!window.confirm(
+    "Permanently delete this message?\n\n" +
+    "This cannot be undone. The message is gone for everyone, including admins."
+  )) return;
+  try {
+    await deleteDoc(msgDocRef(channelId, m));
+  } catch (err) {
+    alert("Purge failed: " + err.message);
   }
 }
 
@@ -1776,6 +2170,10 @@ el.formCompose.addEventListener("submit", async (e) => {
       el.uploadStatus.textContent = "";
     }
     await addDoc(collection(db, "channels", channelId, "messages"), msg);
+    // Bump channel's lastMessageAt so the sidebar can sort by recent activity.
+    updateDoc(doc(db, "channels", channelId), {
+      lastMessageAt: serverTimestamp(),
+    }).catch((e) => console.warn("lastMessageAt bump failed", e));
   } catch (err) {
     console.error(err);
     el.uploadStatus.textContent = "";
@@ -2029,13 +2427,135 @@ el.formNewTeam.addEventListener("submit", async (e) => {
 // ===========================================================================
 
 el.btnNewDm.addEventListener("click", () => {
-  renderMemberPicker(el.dmMemberList, { multi: false, onPick: async (otherUid) => {
-    el.dialogNewDm.close();
-    await openOrCreateDm(otherUid);
-  }});
+  if (el.newDmError) el.newDmError.hidden = true;
+  renderMemberPicker(el.dmMemberList, { multi: true });
   el.dialogNewDm.showModal();
 });
 el.btnNewDmCancel.addEventListener("click", () => el.dialogNewDm.close());
+
+el.btnNewDmStart?.addEventListener("click", async () => {
+  if (el.newDmError) el.newDmError.hidden = true;
+  // The picker auto-checks self (disabled checkbox); exclude that uid.
+  const selected = [...el.dmMemberList.querySelectorAll("input[type=checkbox]:checked")]
+    .map((c) => c.value)
+    .filter((u) => u !== state.user.uid);
+  if (selected.length === 0) {
+    el.newDmError.textContent = "Pick at least one person.";
+    el.newDmError.hidden = false;
+    return;
+  }
+  el.dialogNewDm.close();
+  if (selected.length === 1) {
+    await openOrCreateDm(selected[0]);
+  } else {
+    await createGroupDm(selected);
+  }
+});
+
+// Start a group DM with 2+ other members. Uses a deterministic id so the
+// same set of people always reuses the same channel (no accidental duplicate
+// "Alice, Bob, Charlie" groups). Auto-unhides if the user previously hid it.
+async function createGroupDm(otherUids) {
+  const myUid = state.user.uid;
+  const members = [...new Set([myUid, ...otherUids])].sort();
+  const gdmKey = "gdm_" + members.join("_");
+  // Already in my channel cache? Just open + unhide.
+  const existing = state.channels.find((c) => c.id === gdmKey);
+  if (existing) {
+    if (getMyHiddenDms().includes(gdmKey)) await unhideDm(gdmKey);
+    selectChannel(gdmKey);
+    return;
+  }
+  try {
+    await setDoc(doc(db, "channels", gdmKey), {
+      name: "",                     // group DMs have no name; UI derives from members
+      description: "",
+      type: "dm",
+      members,
+      createdByUid: myUid,
+      createdAt: serverTimestamp(),
+      lastMessageAt: serverTimestamp(),
+      isDefault: false,
+      archived: false,
+    }, { merge: true });    // merge so existing members stay if doc already exists
+    if (getMyHiddenDms().includes(gdmKey)) await unhideDm(gdmKey);
+    selectChannelWhenReady(gdmKey);
+  } catch (err) {
+    alert("Failed to start group DM: " + err.message);
+  }
+}
+
+// ===========================================================================
+// User profile (view) — opened by clicking any avatar or author name.
+// ===========================================================================
+
+function isUserBanned(uidOrUser) {
+  const uid = typeof uidOrUser === "string" ? uidOrUser : uidOrUser?.uid;
+  if (!uid) return false;
+  if ((state.bans.uids || []).includes(uid)) return true;
+  const u = typeof uidOrUser === "string" ? getUserByUid(uid) : uidOrUser;
+  const email = (u?.email || "").toLowerCase();
+  return !!email && (state.bans.emails || []).includes(email);
+}
+
+function showUserProfile(uid) {
+  if (!uid || !el.dialogUserProfile) return;
+  const u = getUserByUid(uid);
+  if (!u) {
+    // Author left or never had a profile doc — show what we have from message
+    // denorm fields if possible, but for the view-only dialog just bail.
+    return;
+  }
+  const banned = isUserBanned(u);
+  // Non-admins shouldn't see banned users' profile at all — they were yanked
+  // from BRS Chat and shouldn't be re-engageable from message history.
+  if (banned && !isAdmin()) return;
+
+  el.userProfileAvatar.innerHTML = "";
+  const av = renderAvatar(u, "lg");
+  el.userProfileAvatar.appendChild(av);
+  el.userProfileName.textContent = u.displayName || "(unnamed)";
+
+  const online = isUserOnline(u);
+  if (banned) {
+    el.userProfileOnline.textContent = "Banned by admin";
+    el.userProfileOnline.className = "user-profile-presence banned";
+  } else {
+    el.userProfileOnline.textContent = online ? "● Online" : "Offline";
+    el.userProfileOnline.className = "user-profile-presence" + (online ? " online" : "");
+  }
+
+  if (u.affiliation) {
+    el.userProfileAffiliation.textContent = u.affiliation;
+    el.userProfileAffiliation.hidden = false;
+  } else {
+    el.userProfileAffiliation.hidden = true;
+  }
+  if (u.email) {
+    el.userProfileEmail.textContent = u.email;
+    el.userProfileEmail.hidden = false;
+  } else {
+    el.userProfileEmail.hidden = true;
+  }
+
+  const isSelf = u.uid === state.user.uid;
+  // Send DM hidden for self and for banned users (banned users can't sign in
+  // anyway, and adding them as a DM member would silently re-include them).
+  el.btnUserProfileDm.hidden = isSelf || banned;
+  el.btnUserProfileEdit.hidden = !isSelf;
+  // Replace prior listeners (showUserProfile may be called many times).
+  el.btnUserProfileDm.onclick = async () => {
+    el.dialogUserProfile.close();
+    await openOrCreateDm(uid);
+  };
+  el.btnUserProfileEdit.onclick = () => {
+    el.dialogUserProfile.close();
+    el.btnEditProfile.click();
+  };
+  el.dialogUserProfile.showModal();
+}
+
+el.btnUserProfileClose?.addEventListener("click", () => el.dialogUserProfile?.close());
 
 async function openOrCreateDm(otherUid) {
   const myUid = state.user.uid;
@@ -2043,7 +2563,11 @@ async function openOrCreateDm(otherUid) {
   const dmKey = "dm_" + [myUid, otherUid].sort().join("_");
   // Does it already exist locally?
   const existing = state.channels.find((c) => c.id === dmKey);
-  if (existing) { selectChannel(dmKey); return; }
+  if (existing) {
+    if (getMyHiddenDms().includes(dmKey)) await unhideDm(dmKey);
+    selectChannel(dmKey);
+    return;
+  }
   // Create with a known id.
   try {
     await setDoc(doc(db, "channels", dmKey), {
@@ -2053,20 +2577,38 @@ async function openOrCreateDm(otherUid) {
       members: [myUid, otherUid].sort(),
       createdByUid: myUid,
       createdAt: serverTimestamp(),
+      lastMessageAt: serverTimestamp(),
       isDefault: false,
       archived: false,
     });
-    selectChannel(dmKey);
+    // Give subscribeChannels a moment to deliver the new doc into state.channels;
+    // selectChannel bails silently if the id isn't there yet.
+    selectChannelWhenReady(dmKey);
   } catch (err) {
     alert("Failed to start DM: " + err.message);
   }
+}
+
+// Polls state.channels for the given id and selects it when it appears, with
+// a few retries. Used after creating a channel/DM so we don't race the
+// onSnapshot delivery.
+function selectChannelWhenReady(channelId, attemptsLeft = 10) {
+  if (state.channels.find((c) => c.id === channelId)) {
+    selectChannel(channelId);
+    return;
+  }
+  if (attemptsLeft <= 0) {
+    alert("DM channel was created but didn't appear in the channel list. Try refreshing.");
+    return;
+  }
+  setTimeout(() => selectChannelWhenReady(channelId, attemptsLeft - 1), 150);
 }
 
 // Render a list of users with checkboxes (multi) or click-to-pick (single).
 function renderMemberPicker(container, { multi, onPick }) {
   container.innerHTML = "";
   const users = state.allUsers
-    .filter((u) => u.displayName)
+    .filter((u) => u.displayName && !isUserBanned(u))
     .sort((a, b) => (a.displayName || "").localeCompare(b.displayName || ""));
   for (const u of users) {
     const isSelf = u.uid === state.user.uid;
@@ -2123,6 +2665,11 @@ function findGeneralChannel() {
 // the subscription because they're not yet a member).
 async function ensureJoinedGeneral() {
   if (generalJoinAttempted) return;
+  // Banned users must not be auto-rejoined.
+  if (isBanned()) {
+    generalJoinAttempted = true;
+    return;
+  }
   generalJoinAttempted = true;
   try {
     const snap = await getDocs(query(
@@ -2158,21 +2705,32 @@ function renderMembersDialog() {
   const ch = state.channels.find((c) => c.id === state.currentChannelId);
   if (!ch) return;
   const isGeneral = (ch.name || "").toLowerCase() === GENERAL_CHANNEL_NAME;
-  const prefix = ch.type === "team" ? "🔒 " : "#";
+  const isGroupDm = ch.type === "dm" && (ch.members || []).length > 2;
+  let prefix, title;
+  if (isGroupDm) {
+    prefix = "👥 ";
+    title = `Members of ${prefix}${dmLabel(ch)}`;
+  } else {
+    prefix = ch.type === "team" ? "🔒 " : "#";
+    title = `Members of ${prefix}${ch.name}`;
+  }
   const admin = isAdmin();
 
-  el.membersTitle.textContent = `Members of ${prefix}${ch.name}`;
-  el.membersHint.textContent = isGeneral
-    ? (admin
-        ? "#general includes everyone automatically. As an admin you can force-remove anyone (banning)."
-        : "#general includes everyone automatically. Only admins can remove members.")
-    : (admin
-        ? "You can add anyone and remove anyone (admin)."
-        : "You can invite anyone. You can only leave yourself — only admins can remove others.");
+  el.membersTitle.textContent = title;
+  el.membersHint.textContent = isGroupDm
+    ? "Add or remove members from this group DM. Anyone with chat access can be invited."
+    : isGeneral
+      ? (admin
+          ? "#general includes everyone automatically. As an admin you can force-remove anyone (banning)."
+          : "#general includes everyone automatically. Only admins can remove members.")
+      : (admin
+          ? "You can add anyone and remove anyone (admin)."
+          : "You can invite anyone. You can only leave yourself — only admins can remove others.");
 
   const memberUids = new Set(ch.members || []);
   const memberUsers = state.allUsers.filter((u) => memberUids.has(u.uid));
-  const nonMembers = state.allUsers.filter((u) => !memberUids.has(u.uid));
+  const nonMembers = state.allUsers
+    .filter((u) => !memberUids.has(u.uid) && !isUserBanned(u));
 
   // Current members
   el.membersList.innerHTML = "";
@@ -2215,6 +2773,16 @@ function renderMembersDialog() {
         : (isSelf ? "Leave this channel" : "Remove from channel (admin)");
       rm.addEventListener("click", () => removeMember(ch.id, u.uid));
       row.appendChild(rm);
+    }
+    // Ban: admin only, never self. Bans the user from the entire chat.
+    if (admin && !isSelf) {
+      const ban = document.createElement("button");
+      ban.type = "button";
+      ban.className = "remove-btn ban-btn";
+      ban.textContent = "Ban";
+      ban.title = "Ban from BRS Chat (admin) — removes from all channels and blocks re-sign-in";
+      ban.addEventListener("click", () => banUser(u.uid, u.email, u.displayName));
+      row.appendChild(ban);
     }
     el.membersList.appendChild(row);
   }
@@ -2274,6 +2842,72 @@ async function removeMember(channelId, uid) {
   }
 }
 
+// Ban: yank a user from every channel and prevent re-sign-in.
+// Past messages are preserved (delete them separately if needed).
+// Reversible via Unban from the Admin panel.
+async function banUser(uid, email, displayName) {
+  if (!isAdmin()) return;
+  if (uid === state.user.uid) {
+    alert("You can't ban yourself.");
+    return;
+  }
+  const reason = window.prompt(
+    `Ban "${displayName}" from BRS Chat?\n\n` +
+    `This will:\n` +
+    `  • Remove them from every channel (public, team, and DM)\n` +
+    `  • Sign them out and block them from signing back in\n` +
+    `  • Past messages remain (delete those individually if needed)\n\n` +
+    `This is reversible — you can Unban them later from Admin panel.\n\n` +
+    `Reason (optional, recorded for audit):`,
+    "",
+  );
+  if (reason === null) return;  // cancelled
+  try {
+    // Find every channel the user is a member of and remove them in parallel.
+    const snap = await getDocs(query(
+      collection(db, "channels"),
+      where("members", "array-contains", uid),
+    ));
+    await Promise.all(snap.docs.map((d) =>
+      updateDoc(d.ref, { members: arrayRemove(uid) })
+    ));
+    // Add to bans list (uid for known users; email for future reuse / Phase A).
+    const updates = {
+      uids: arrayUnion(uid),
+      updatedAt: serverTimestamp(),
+      updatedBy: state.user.uid,
+      lastReason: reason || null,
+    };
+    if (email) updates.emails = arrayUnion((email || "").toLowerCase());
+    await setDoc(doc(db, "config", "bans"), updates, { merge: true });
+    alert(`${displayName} has been banned. They were removed from ${snap.size} channel(s).`);
+  } catch (err) {
+    alert("Ban failed: " + err.message);
+  }
+}
+
+// Unban: removes user from config/bans. They can sign in again and will
+// auto-rejoin #general on next sign-in. Other channels need re-invite.
+async function unbanUser(uid, email, displayName) {
+  if (!isAdmin()) return;
+  if (!window.confirm(
+    `Unban ${displayName}?\n\n` +
+    `They'll be able to sign in again and will auto-rejoin #general on next sign-in. ` +
+    `Other channels need to be invited manually.`
+  )) return;
+  try {
+    const updates = {
+      updatedAt: serverTimestamp(),
+      updatedBy: state.user.uid,
+    };
+    if (uid) updates.uids = arrayRemove(uid);
+    if (email) updates.emails = arrayRemove((email || "").toLowerCase());
+    await setDoc(doc(db, "config", "bans"), updates, { merge: true });
+  } catch (err) {
+    alert("Unban failed: " + err.message);
+  }
+}
+
 // ---- Admin panel ----
 
 el.btnAdminPanel?.addEventListener("click", () => {
@@ -2293,25 +2927,72 @@ function renderAdminDialog() {
     p.className = "hint";
     p.textContent = "No admins set. Add one below.";
     el.adminList.appendChild(p);
+  } else {
+    for (const email of state.adminEmails) {
+      const row = document.createElement("div");
+      row.className = "member-row";
+      row.style.padding = "4px 0";
+      const label = document.createElement("span");
+      label.style.flex = "1";
+      label.textContent = email + (email === (state.user.email || "").toLowerCase() ? " (you)" : "");
+      row.appendChild(label);
+      if (isAdmin()) {
+        const rm = document.createElement("button");
+        rm.type = "button";
+        rm.className = "remove-btn";
+        rm.textContent = "Revoke";
+        rm.addEventListener("click", () => removeAdmin(email));
+        row.appendChild(rm);
+      }
+      el.adminList.appendChild(row);
+    }
+  }
+  renderBansList();
+}
+
+function renderBansList() {
+  if (!el.bansList) return;
+  el.bansList.innerHTML = "";
+  // Build a unified list keyed by uid OR email (some entries may have only one).
+  const rows = [];
+  for (const uid of (state.bans.uids || [])) {
+    const u = state.allUsers.find((x) => x.uid === uid);
+    rows.push({
+      uid,
+      email: (u?.email || "").toLowerCase(),
+      displayName: u?.displayName || `(unknown user · uid ${uid.slice(0, 6)}…)`,
+    });
+  }
+  for (const email of (state.bans.emails || [])) {
+    if (rows.find((r) => r.email === email)) continue;  // already covered by uid row
+    rows.push({ uid: null, email, displayName: email });
+  }
+  if (rows.length === 0) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "No one is banned.";
+    el.bansList.appendChild(p);
     return;
   }
-  for (const email of state.adminEmails) {
+  for (const r of rows) {
     const row = document.createElement("div");
     row.className = "member-row";
     row.style.padding = "4px 0";
     const label = document.createElement("span");
     label.style.flex = "1";
-    label.textContent = email + (email === (state.user.email || "").toLowerCase() ? " (you)" : "");
+    label.textContent = r.displayName + (r.email && r.displayName !== r.email ? ` <${r.email}>` : "");
     row.appendChild(label);
     if (isAdmin()) {
-      const rm = document.createElement("button");
-      rm.type = "button";
-      rm.className = "remove-btn";
-      rm.textContent = "Revoke";
-      rm.addEventListener("click", () => removeAdmin(email));
-      row.appendChild(rm);
+      const ub = document.createElement("button");
+      ub.type = "button";
+      ub.className = "secondary-btn";
+      ub.style.padding = "4px 12px";
+      ub.style.width = "auto";
+      ub.textContent = "Unban";
+      ub.addEventListener("click", () => unbanUser(r.uid, r.email, r.displayName));
+      row.appendChild(ub);
     }
-    el.adminList.appendChild(row);
+    el.bansList.appendChild(row);
   }
 }
 
@@ -2535,6 +3216,10 @@ async function openThread(channelId, parentMsgId) {
     const snap = await getDoc(doc(db, "channels", channelId, "messages", parentMsgId));
     if (!snap.exists()) { el.threadParent.textContent = "(Message not found)"; return; }
     state.threadParent = { id: snap.id, ...snap.data() };
+    if (isHiddenForViewer(state.threadParent)) {
+      el.threadParent.textContent = "(Message not found)";
+      return;
+    }
     el.threadParent.innerHTML = "";
     el.threadParent.appendChild(renderMessage(state.threadParent, channelId));
   } catch (err) {
@@ -2549,7 +3234,9 @@ async function openThread(channelId, parentMsgId) {
   state.unsubThreadReplies = onSnapshot(q, (snap) => {
     el.threadReplies.innerHTML = "";
     for (const d of snap.docs) {
-      el.threadReplies.appendChild(renderMessage({ id: d.id, ...d.data() }, channelId));
+      const m = { id: d.id, ...d.data() };
+      if (isHiddenForViewer(m)) continue;
+      el.threadReplies.appendChild(renderMessage(m, channelId));
     }
     el.threadReplies.scrollTop = el.threadReplies.scrollHeight;
   });
@@ -2675,6 +3362,9 @@ el.formPoll.addEventListener("submit", async (e) => {
       deleted: false,
       backedUpAt: null,
     });
+    updateDoc(doc(db, "channels", channelId), {
+      lastMessageAt: serverTimestamp(),
+    }).catch((e) => console.warn("lastMessageAt bump failed", e));
     el.dialogPoll.close();
   } catch (err) {
     el.pollError.textContent = err.message;
@@ -2858,7 +3548,7 @@ async function openBookmarks() {
       const meta = document.createElement("div");
       meta.className = "bookmark-item-meta";
       meta.textContent =
-        (ch ? (ch.type === "dm" ? "@" + (getDmOtherUser(ch)?.displayName || "dm") : "#" + ch.name) : "(channel)") +
+        (ch ? (ch.type === "dm" ? "@" + dmLabel(ch) : "#" + ch.name) : "(channel)") +
         " · " + (getUserByUid(m.authorUid)?.displayName || m.authorName || "") + " · " + formatTime(m.createdAt);
       const text = document.createElement("div");
       text.innerHTML = renderMessageBody(m.text || (m.image ? "[image]" : "[message]")).html;
@@ -2990,7 +3680,7 @@ function renderSwitcherResults(q) {
   const qlow = q.trim().toLowerCase();
   // Channels
   const chs = state.channels.filter((c) => !c.archived).filter((c) => {
-    const label = c.type === "dm" ? (getDmOtherUser(c)?.displayName || "") : c.name;
+    const label = c.type === "dm" ? dmLabel(c) : c.name;
     return !qlow || label.toLowerCase().includes(qlow);
   }).slice(0, 20);
   // Users (for DM jump)
@@ -3006,7 +3696,7 @@ function renderSwitcherResults(q) {
     const prefix = isDm ? "@" : (c.type === "team" ? "🔒" : "#");
     row.innerHTML = `<span class="switcher-hash">${prefix}</span><span></span>`;
     row.querySelector("span:last-child").textContent = isDm
-      ? (getDmOtherUser(c)?.displayName || "dm")
+      ? dmLabel(c)
       : c.name;
     row.addEventListener("click", () => {
       selectChannel(c.id);
@@ -3051,7 +3741,7 @@ async function exportCurrentChannel() {
   const ch = state.channels.find((c) => c.id === state.currentChannelId);
   if (!ch) return;
   const lines = [];
-  lines.push(`# ${ch.type === "dm" ? "DM with " + (getDmOtherUser(ch)?.displayName || "") : "#" + ch.name}`);
+  lines.push(`# ${ch.type === "dm" ? "DM with " + dmLabel(ch) : "#" + ch.name}`);
   lines.push("");
   lines.push(`_Exported ${new Date().toLocaleString()}_`);
   lines.push("");
@@ -3377,7 +4067,7 @@ function renderMentionsView() {
     meta.className = "bookmark-item-meta";
     const kindLabel = isMention ? "@you" : isDm ? "DM" : "@channel";
     const chTitle = ch.type === "dm"
-      ? "@" + (getDmOtherUser(ch)?.displayName || "dm")
+      ? "@" + dmLabel(ch)
       : "#" + ch.name;
     const liveName = getUserByUid(m.authorUid)?.displayName || m.authorName || "?";
     meta.textContent = `${kindLabel} · ${chTitle} · ${liveName} · ${formatTime(m.createdAt)}`;
@@ -3613,7 +4303,7 @@ function maybeNotify(ch, m) {
 
   const author = getUserByUid(m.authorUid);
   const chTitle = ch.type === "dm"
-    ? (getDmOtherUser(ch)?.displayName || "Direct message")
+    ? dmLabel(ch)
     : ("#" + ch.name);
   const title = `${author?.displayName || m.authorName || "New message"}  ·  ${chTitle}`;
   const body = m.text || (m.image ? "[image]" : "");
