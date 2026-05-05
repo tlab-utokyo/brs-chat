@@ -1424,11 +1424,11 @@ dialog {
   }
 }
 
-/* Maintenance banner — shown when config/maintenance.active is true */
+/* Maintenance banner — shown when config/maintenance.active is true.
+   Stays in normal flow at the top of <body> so the screens (which use
+   height:100dvh) need to shrink to make room. The sibling selector below
+   reclaims that space. */
 .maintenance-banner {
-  position: sticky;
-  top: 0;
-  z-index: 100;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1440,10 +1440,17 @@ dialog {
   text-align: center;
   justify-content: center;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  flex-shrink: 0;
+  min-height: 40px;
 }
 .maintenance-banner .maintenance-icon {
   font-size: 18px;
   filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.25));
+}
+/* When the banner is visible, every following screen loses its banner-height
+   from the viewport so the composer at the bottom stays visible. */
+.maintenance-banner:not([hidden]) ~ .screen {
+  height: calc(100dvh - 44px);
 }
 .toggle-row {
   display: flex;
