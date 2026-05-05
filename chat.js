@@ -16,8 +16,12 @@ import {
 import {
   getFunctions, httpsCallable,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-functions.js";
+import {
+  getMessaging, getToken, onMessage, deleteToken,
+  isSupported as isMessagingSupported,
+} from "https://www.gstatic.com/firebasejs/10.13.2/firebase-messaging.js";
 
-import { firebaseConfig, cloudinaryConfig, functionsRegion, PHASE_0, IMAGE_UPLOAD_ENABLED } from "./firebase-config.js";
+import { firebaseConfig, cloudinaryConfig, functionsRegion, PHASE_0, IMAGE_UPLOAD_ENABLED, FCM_VAPID_KEY } from "./firebase-config.js";
 
 // ===========================================================================
 // Setup
@@ -639,6 +643,7 @@ async function handleEmailLinkReturn() {
 // --- Sign out ---
 
 el.btnSignout.addEventListener("click", async () => {
+  try { await unregisterFCMToken(); } catch (_) {}
   await signOut(auth);
 });
 
@@ -893,6 +898,7 @@ function initChat() {
   subscribeBans();
   subscribeMaintenance();
   initNotifications();
+  initFCM().then(registerFCMToken).catch((e) => console.warn("[fcm] init failed", e));
 }
 
 function teardownChatSubscriptions() {
@@ -4273,6 +4279,9 @@ el.btnEnableNotify?.addEventListener("click", async () => {
       body: "You'll be notified for @mentions, @channel and DMs.",
       icon: "./logo.png",
     });
+    // Subscribe this browser to FCM push so it keeps working when the tab is
+    // closed. Falls through silently if VAPID key isn't configured yet.
+    initFCM().then(registerFCMToken).catch((e) => console.warn("[fcm] init failed", e));
   }
 });
 el.btnDismissNotify?.addEventListener("click", () => {
@@ -4479,6 +4488,107 @@ function maybeNotify(ch, m) {
     };
   } catch (err) {
     console.warn("notification failed", err);
+  }
+}
+
+// ===========================================================================
+// FCM (Phase A push). Subscribes the browser/SW to Firebase Cloud Messaging
+// so that pushes from the sendPushOnNewMessage Cloud Function reach this
+// device even when the tab is closed.
+//
+// In foreground we still rely on the existing Firestore snapshot listener
+// (maybeNotify) to surface new messages — FCM's onMessage fires too, but we
+// keep that path quiet to avoid double notifications. The SW handles the
+// background case alone.
+// ===========================================================================
+
+let fcmMessaging = null;
+let fcmReady = false;
+let fcmSwRegistration = null;
+const FCM_TOKEN_LOCAL_KEY = "brsChat.fcmToken";
+
+async function initFCM() {
+  if (fcmReady) return;
+  if (!FCM_VAPID_KEY) return;  // not configured yet, fall back to in-tab Notifications
+  if (!("serviceWorker" in navigator)) return;
+  let supported = false;
+  try { supported = await isMessagingSupported(); } catch (_) { supported = false; }
+  if (!supported) return;
+
+  try {
+    fcmSwRegistration = await navigator.serviceWorker.register(
+      "./firebase-messaging-sw.js",
+      { scope: "./" },
+    );
+  } catch (err) {
+    console.warn("[fcm] sw registration failed", err);
+    return;
+  }
+
+  fcmMessaging = getMessaging(app);
+  fcmReady = true;
+
+  // Foreground messages — log only. The Firestore snapshot listener
+  // already updates the UI and the existing maybeNotify shows the in-tab
+  // Notification when appropriate.
+  onMessage(fcmMessaging, (payload) => {
+    console.log("[fcm] foreground", payload);
+  });
+
+  // SW → page postMessage when a notification is clicked.
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    if (event.data?.type === "fcm-notification-click" && event.data.channelId) {
+      try { selectChannel(event.data.channelId); } catch (e) { console.warn(e); }
+    }
+  });
+}
+
+// Register the current browser's FCM token under users/{uid}.fcmTokens.
+// Called when the user grants Notification permission, and again on every
+// sign-in (token may rotate or have been removed by the browser).
+async function registerFCMToken() {
+  if (!fcmReady || !state.user) return;
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  try {
+    const token = await getToken(fcmMessaging, {
+      vapidKey: FCM_VAPID_KEY,
+      serviceWorkerRegistration: fcmSwRegistration,
+    });
+    if (!token) {
+      console.warn("[fcm] getToken returned empty");
+      return;
+    }
+    const tokenId = (await sha256Hex(token)).slice(0, 16);
+    await updateDoc(doc(db, "users", state.user.uid), {
+      [`fcmTokens.${tokenId}`]: {
+        token,
+        ua: (navigator.userAgent || "").slice(0, 200),
+        createdAt: serverTimestamp(),
+        lastUsedAt: serverTimestamp(),
+      },
+    });
+    localStorage.setItem(FCM_TOKEN_LOCAL_KEY, tokenId);
+    console.log("[fcm] token registered", tokenId);
+  } catch (err) {
+    console.warn("[fcm] getToken failed", err);
+  }
+}
+
+// Best-effort cleanup on explicit sign-out. Removes this browser's token
+// from the user doc so the Cloud Function stops targeting it.
+async function unregisterFCMToken() {
+  const tokenId = localStorage.getItem(FCM_TOKEN_LOCAL_KEY);
+  if (!tokenId) return;
+  localStorage.removeItem(FCM_TOKEN_LOCAL_KEY);
+  if (fcmReady) {
+    try { await deleteToken(fcmMessaging); } catch (_) {}
+  }
+  if (state.user) {
+    try {
+      await updateDoc(doc(db, "users", state.user.uid), {
+        [`fcmTokens.${tokenId}`]: deleteField(),
+      });
+    } catch (_) {}
   }
 }
 

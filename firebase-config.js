@@ -26,3 +26,10 @@ export const PHASE_0 = false;
 // breaks or the budget needs to be cut — flipping to false hides the
 // attach button without disabling the rest of the chat.
 export const IMAGE_UPLOAD_ENABLED = true;
+
+// FCM Web Push public VAPID key. Generate at:
+//   Firebase Console → Project Settings → Cloud Messaging tab →
+//   Web Push certificates → Generate key pair
+// Until this is filled in, push subscription is disabled and the chat falls
+// back to the existing in-tab Notification API.
+export const FCM_VAPID_KEY = "BDKQ7iKEUz-5XHd6UZRH69iH6w7iuGZN7DownJfsLdRc6YCLgMcM8f5lEQuV6_h8095Wt_K4hBs6wraq9mCIkoU";
