@@ -4509,11 +4509,20 @@ const FCM_TOKEN_LOCAL_KEY = "brsChat.fcmToken";
 
 async function initFCM() {
   if (fcmReady) return;
-  if (!FCM_VAPID_KEY) return;  // not configured yet, fall back to in-tab Notifications
-  if (!("serviceWorker" in navigator)) return;
+  if (!FCM_VAPID_KEY) {
+    console.info("[fcm] disabled: FCM_VAPID_KEY is empty in firebase-config.js");
+    return;
+  }
+  if (!("serviceWorker" in navigator)) {
+    console.info("[fcm] disabled: this browser does not support service workers");
+    return;
+  }
   let supported = false;
   try { supported = await isMessagingSupported(); } catch (_) { supported = false; }
-  if (!supported) return;
+  if (!supported) {
+    console.info("[fcm] disabled: messaging not supported in this browser");
+    return;
+  }
 
   try {
     fcmSwRegistration = await navigator.serviceWorker.register(
@@ -4527,6 +4536,7 @@ async function initFCM() {
 
   fcmMessaging = getMessaging(app);
   fcmReady = true;
+  console.info("[fcm] initialized (sw registered, ready to subscribe)");
 
   // Foreground messages — log only. The Firestore snapshot listener
   // already updates the UI and the existing maybeNotify shows the in-tab
@@ -4547,8 +4557,19 @@ async function initFCM() {
 // Called when the user grants Notification permission, and again on every
 // sign-in (token may rotate or have been removed by the browser).
 async function registerFCMToken() {
-  if (!fcmReady || !state.user) return;
-  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  if (!fcmReady) {
+    console.info("[fcm] cannot register: not initialized yet");
+    return;
+  }
+  if (!state.user) {
+    console.info("[fcm] cannot register: no signed-in user");
+    return;
+  }
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") {
+    console.info("[fcm] cannot register: notification permission =",
+      typeof Notification !== "undefined" ? Notification.permission : "(unsupported)");
+    return;
+  }
   try {
     const token = await getToken(fcmMessaging, {
       vapidKey: FCM_VAPID_KEY,
