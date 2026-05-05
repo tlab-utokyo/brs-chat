@@ -2627,6 +2627,30 @@ function renderMemberPicker(container, { multi, onPick }) {
   const users = state.allUsers
     .filter((u) => u.displayName && !isUserBanned(u))
     .sort((a, b) => (a.displayName || "").localeCompare(b.displayName || ""));
+
+  if (users.length === 0) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "No other users yet. Ask someone to sign in first.";
+    container.appendChild(p);
+    return;
+  }
+
+  // Filter input — visible when the candidate list is long enough to need it.
+  // Rows are hidden with display:none rather than removed, so any checkboxes
+  // already ticked in multi-select mode keep their state across filter changes.
+  let searchInput = null;
+  let emptyHint = null;
+  if (users.length >= 5) {
+    searchInput = document.createElement("input");
+    searchInput.type = "search";
+    searchInput.className = "member-picker-search";
+    searchInput.placeholder = "Search by name, affiliation, or email…";
+    searchInput.autocomplete = "off";
+    container.appendChild(searchInput);
+  }
+
+  const rows = [];
   for (const u of users) {
     const isSelf = u.uid === state.user.uid;
     const row = document.createElement("label");
@@ -2653,13 +2677,36 @@ function renderMemberPicker(container, { multi, onPick }) {
     if (!multi && !isSelf && onPick) {
       row.addEventListener("click", () => onPick(u.uid));
     }
+    rows.push({ user: u, el: row });
     container.appendChild(row);
   }
-  if (users.length === 0) {
-    const p = document.createElement("p");
-    p.className = "hint";
-    p.textContent = "No other users yet. Ask someone to sign in first.";
-    container.appendChild(p);
+
+  if (searchInput) {
+    emptyHint = document.createElement("p");
+    emptyHint.className = "hint";
+    emptyHint.textContent = "No matching people.";
+    emptyHint.style.display = "none";
+    container.appendChild(emptyHint);
+
+    searchInput.addEventListener("input", () => {
+      const f = searchInput.value.trim().toLowerCase();
+      let visibleCount = 0;
+      for (const { user, el } of rows) {
+        const hay = (
+          (user.displayName || "") + " " +
+          (user.email || "") + " " +
+          (user.affiliation || "")
+        ).toLowerCase();
+        const match = !f || hay.includes(f);
+        el.style.display = match ? "" : "none";
+        if (match) visibleCount++;
+      }
+      emptyHint.style.display = visibleCount === 0 ? "" : "none";
+    });
+
+    // Autofocus the search field when the dialog mounts the picker, so the
+    // user can start typing immediately.
+    setTimeout(() => searchInput.focus(), 50);
   }
 }
 

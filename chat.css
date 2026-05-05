@@ -1125,6 +1125,24 @@ a.brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; b
   .channel-list .dm-hide-btn { visibility: visible; opacity: 0.7; }
 }
 
+/* Search field at the top of the member picker (New DM / New Team dialogs).
+   Auto-appears when the candidate list is 5+ people. */
+.member-picker-search {
+  display: block;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 0.95rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-color);
+  box-sizing: border-box;
+}
+.member-picker-search:focus { outline: none; border-color: var(--accent); }
+.member-picker-search::placeholder { color: var(--text-muted); }
+
 /* DM filter input above the DM list. Auto-shown when 5+ DMs exist. */
 .dm-filter {
   display: block;
