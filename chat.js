@@ -127,6 +127,7 @@ const el = {
   btnNewDmCancel: $("btn-new-dm-cancel"),
   btnNewDmStart: $("btn-new-dm-start"),
   newDmError: $("new-dm-error"),
+  dmFilter: $("dm-filter"),
   dialogNewReaction: $("dialog-new-reaction"),
   formNewReaction: $("form-new-reaction"),
   inputReactionEmoji: $("input-reaction-emoji"),
@@ -293,6 +294,7 @@ const state = {
   bans: { uids: [], emails: [] }, // from config/bans
   unsubBans: null,
   showHiddenDms: false,        // toggle: include user-hidden DMs in sidebar
+  dmFilter: "",                // sidebar DM filter substring (case-insensitive)
 };
 
 function isAdmin() {
@@ -1076,10 +1078,19 @@ function renderChannelLists() {
     if (hiddenSet.has(ch.id)) hiddenDms.push(ch);
     else visibleDms.push(ch);
   }
+  // Optional sidebar filter — substring match against the comma-joined label.
+  const f = (state.dmFilter || "").trim().toLowerCase();
+  const matches = (ch) => !f || dmLabel(ch).toLowerCase().includes(f);
+  const filteredVisibleDms = visibleDms.filter(matches);
+  const filteredHiddenDms = hiddenDms.filter(matches);
+  // Auto-show the filter input only when there are enough DMs to bother with.
+  if (el.dmFilter) {
+    el.dmFilter.hidden = (visibleDms.length + hiddenDms.length) < 5;
+  }
   renderChannelSection(el.channelList, pub, "public");
   renderChannelSection(el.teamList, teams, "team");
-  renderChannelSection(el.dmList, visibleDms, "dm");
-  renderHiddenDmsFooter(hiddenDms);
+  renderChannelSection(el.dmList, filteredVisibleDms, "dm");
+  renderHiddenDmsFooter(filteredHiddenDms);
 }
 
 // Append a "Show N hidden DMs" / "Hide hidden DMs" toggle plus the hidden
@@ -2430,6 +2441,12 @@ el.btnNewDm.addEventListener("click", () => {
   if (el.newDmError) el.newDmError.hidden = true;
   renderMemberPicker(el.dmMemberList, { multi: true });
   el.dialogNewDm.showModal();
+});
+
+// Sidebar DM filter — type to narrow the list by member name.
+el.dmFilter?.addEventListener("input", () => {
+  state.dmFilter = el.dmFilter.value;
+  renderChannelLists();
 });
 el.btnNewDmCancel.addEventListener("click", () => el.dialogNewDm.close());
 
