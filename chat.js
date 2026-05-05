@@ -2399,11 +2399,12 @@ async function uploadImage({ blob, file }, channelId) {
   }
   const result = await res.json();
 
-  // 3. Build thumb URL via transformation.
-  const thumbUrl = result.secure_url.replace(
-    "/image/upload/",
-    "/image/upload/c_fill,w_600,h_600,q_auto,f_auto/",
-  );
+  // 3. Use the original URL as thumb. The upload preset's incoming
+  // transformation already caps at 1920px with q_auto:good / f_auto, so the
+  // original is already optimized; CSS scales it down to 300px for display.
+  // Using the unmodified URL avoids Cloudinary's Strict Transformations
+  // rejecting ad-hoc transform URLs (returns HTTP 401).
+  const thumbUrl = result.secure_url;
 
   return {
     publicId: result.public_id,
