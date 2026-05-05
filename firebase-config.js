@@ -22,7 +22,7 @@ export const functionsRegion = "asia-northeast1";
 // to false: the brsMember custom claim is then required for any Firestore op.
 export const PHASE_0 = false;
 
-// Toggles the image-attach button. Stays false until the getUploadSignature
-// callable + Cloudinary upload flow is wired into chat.js. Flip to true once
-// the image upload UI integration is complete.
-export const IMAGE_UPLOAD_ENABLED = false;
+// Toggles the image-attach button. Acts as a kill switch if Cloudinary
+// breaks or the budget needs to be cut — flipping to false hides the
+// attach button without disabling the rest of the chat.
+export const IMAGE_UPLOAD_ENABLED = true;
