@@ -330,6 +330,14 @@
         <p id="maintenance-status" class="hint" style="margin-top:6px"></p>
       </fieldset>
 
+      <fieldset class="notif-group">
+        <legend>Image backup export</legend>
+        <p class="hint">One-shot tool: lists every message that has an image attached, so you can copy the JSON and download/back up the originals from Cloudinary. Output is shown in the textbox below — copy it and hand it off.</p>
+        <button type="button" id="btn-export-image-list" class="secondary-btn" style="width:auto; padding:6px 14px">Export image list (JSON)</button>
+        <p id="image-list-status" class="hint" style="margin-top:6px"></p>
+        <textarea id="image-list-output" rows="6" style="width:100%; margin-top:6px; font-family:monospace; font-size:0.75rem" hidden readonly></textarea>
+      </fieldset>
+
       <div class="dialog-actions">
         <button type="button" id="btn-admin-close" class="primary-btn">Close</button>
       </div>

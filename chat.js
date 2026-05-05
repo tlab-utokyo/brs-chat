@@ -190,6 +190,9 @@ const el = {
   btnPauseNow: $("btn-pause-now"),
   btnResumeNow: $("btn-resume-now"),
   maintenanceStatus: $("maintenance-status"),
+  btnExportImageList: $("btn-export-image-list"),
+  imageListStatus: $("image-list-status"),
+  imageListOutput: $("image-list-output"),
   adminError: $("admin-error"),
   bansList: $("bans-list"),
   // User profile (view) dialog
@@ -4654,6 +4657,30 @@ el.btnRotateInvite?.addEventListener("click", async () => {
   } catch (err) {
     el.inviteRotateStatus.textContent = "Failed: " + err.message;
     el.inviteRotateStatus.style.color = "var(--danger)";
+  }
+});
+
+// Admin panel: export image list for backup. Returns a JSON dump so the
+// admin can hand it off to a backup script that downloads the originals
+// from Cloudinary and uploads them elsewhere (e.g. Google Drive).
+el.btnExportImageList?.addEventListener("click", async () => {
+  if (!isAdmin()) return;
+  el.imageListStatus.textContent = "Loading…";
+  el.imageListStatus.style.color = "";
+  el.imageListOutput.hidden = true;
+  el.imageListOutput.value = "";
+  try {
+    const fn = httpsCallable(functions, "listImagesForBackup");
+    const { data } = await fn({});
+    const json = JSON.stringify(data, null, 2);
+    el.imageListOutput.value = json;
+    el.imageListOutput.hidden = false;
+    el.imageListOutput.select();
+    el.imageListStatus.textContent =
+      `OK: ${data.items?.length ?? 0} image(s) across ${Object.keys(data.channels || {}).length} channel(s). Copy the textbox below.`;
+  } catch (err) {
+    el.imageListStatus.textContent = "Failed: " + err.message;
+    el.imageListStatus.style.color = "var(--danger)";
   }
 });
 
