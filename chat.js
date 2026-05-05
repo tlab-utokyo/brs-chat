@@ -17,7 +17,7 @@ import {
   getFunctions, httpsCallable,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-functions.js";
 
-import { firebaseConfig, cloudinaryConfig, functionsRegion, PHASE_0 } from "./firebase-config.js";
+import { firebaseConfig, cloudinaryConfig, functionsRegion, PHASE_0, IMAGE_UPLOAD_ENABLED } from "./firebase-config.js";
 
 // ===========================================================================
 // Setup
@@ -31,9 +31,9 @@ const functions = getFunctions(app, functionsRegion);
 const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: "select_account" });
 
-// Phase 0: hide image attach UI since getUploadSignature Cloud Function
-// isn't deployed yet (requires Blaze).
-if (PHASE_0) {
+// Hide image attach UI until the chat.js / getUploadSignature integration
+// is finished.
+if (!IMAGE_UPLOAD_ENABLED) {
   document.addEventListener("DOMContentLoaded", () => {
     const attachBtn = document.getElementById("btn-attach");
     if (attachBtn) attachBtn.style.display = "none";
@@ -67,6 +67,10 @@ document.addEventListener("click", (e) => {
 
 const $ = (id) => document.getElementById(id);
 const el = {
+  inviteScreen: $("invite-screen"),
+  formInvite: $("form-invite"),
+  inputInvite: $("input-invite"),
+  inviteError: $("invite-error"),
   signinScreen: $("signin-screen"),
   profileScreen: $("profile-screen"),
   chatScreen: $("chat-screen"),
@@ -175,6 +179,17 @@ const el = {
   inputNewAdmin: $("input-new-admin"),
   btnAddAdmin: $("btn-add-admin"),
   btnAdminClose: $("btn-admin-close"),
+  inputNewInvite: $("input-new-invite"),
+  btnRotateInvite: $("btn-rotate-invite"),
+  inviteRotateStatus: $("invite-rotate-status"),
+  maintenanceBanner: $("maintenance-banner"),
+  maintenanceMessage: $("maintenance-message"),
+  toggleMaintenance: $("toggle-maintenance"),
+  toggleSigninLockdown: $("toggle-signin-lockdown"),
+  inputMaintenanceMsg: $("input-maintenance-msg"),
+  btnPauseNow: $("btn-pause-now"),
+  btnResumeNow: $("btn-resume-now"),
+  maintenanceStatus: $("maintenance-status"),
   adminError: $("admin-error"),
   bansList: $("bans-list"),
   // User profile (view) dialog
@@ -293,6 +308,8 @@ const state = {
   unsubAdmins: null,
   bans: { uids: [], emails: [] }, // from config/bans
   unsubBans: null,
+  maintenance: { active: false, signInDisabled: false, message: "" }, // from config/maintenance
+  unsubMaintenance: null,
   showHiddenDms: false,        // toggle: include user-hidden DMs in sidebar
   dmFilter: "",                // sidebar DM filter substring (case-insensitive)
 };
@@ -328,6 +345,7 @@ const BASE_TAB_TITLE = document.title;
 // ===========================================================================
 
 function showScreen(name) {
+  if (el.inviteScreen) el.inviteScreen.hidden = name !== "invite";
   el.signinScreen.hidden = name !== "signin";
   el.profileScreen.hidden = name !== "profile";
   el.chatScreen.hidden = name !== "chat";
@@ -741,13 +759,19 @@ document.addEventListener("click", (e) => {
 // Auth state observer
 // ===========================================================================
 
-onAuthStateChanged(auth, async (user) => {
+async function processAuthState(user) {
   state.user = user;
+  // Wait for the invite gate to be evaluated before showing any auth UI.
+  await gateResolved;
   if (!user) {
     teardownChatSubscriptions();
-    showScreen("signin");
+    if (gateState === "open") showScreen("signin");
+    // If gate is closed, the invite screen is already shown — don't override.
     return;
   }
+  // Authed users still need the gate cleared. (e.g. they were already signed
+  // in from a previous session but the admin rotated the invite password.)
+  if (gateState === "closed") return;
 
   // Confirm the blocking function ran and granted the claim.
   // In Phase 0 (Spark, no Functions), this check is skipped — any authenticated
@@ -808,7 +832,9 @@ onAuthStateChanged(auth, async (user) => {
   initChat();
   startHeartbeat();
   handlePermalinkInHash();
-});
+}
+
+onAuthStateChanged(auth, processAuthState);
 
 el.formProfile.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -862,6 +888,7 @@ function initChat() {
   subscribeCustomReactions();
   subscribeAdmins();
   subscribeBans();
+  subscribeMaintenance();
   initNotifications();
 }
 
@@ -877,6 +904,9 @@ function teardownChatSubscriptions() {
   state.adminEmails = [];
   if (state.unsubBans) { state.unsubBans(); state.unsubBans = null; }
   state.bans = { uids: [], emails: [] };
+  if (state.unsubMaintenance) { state.unsubMaintenance(); state.unsubMaintenance = null; }
+  state.maintenance = { active: false, signInDisabled: false, message: "" };
+  applyMaintenanceUi();
   tearDownChannelNotifyListeners();
   if (state.unsubTyping) { state.unsubTyping(); state.unsubTyping = null; }
   stopHeartbeat();
@@ -951,6 +981,64 @@ function subscribeBans() {
   }, (err) => {
     console.warn("bans subscription failed", err);
   });
+}
+
+// Maintenance — config/maintenance.{active, signInDisabled, message}.
+// Read-only mode toggles a banner + disables the composer client-side
+// (server-side enforcement is via firestore.rules canWrite() check).
+function subscribeMaintenance() {
+  if (state.unsubMaintenance) { state.unsubMaintenance(); state.unsubMaintenance = null; }
+  state.unsubMaintenance = onSnapshot(doc(db, "config", "maintenance"), (snap) => {
+    const data = snap.exists() ? (snap.data() || {}) : {};
+    state.maintenance = {
+      active: data.active === true,
+      signInDisabled: data.signInDisabled === true,
+      message: data.message || "",
+    };
+    applyMaintenanceUi();
+    if (el.dialogAdmin?.open) renderMaintenanceControls();
+  }, (err) => {
+    console.warn("maintenance subscription failed", err);
+  });
+}
+
+function applyMaintenanceUi() {
+  const m = state.maintenance || {};
+  if (el.maintenanceBanner) {
+    el.maintenanceBanner.hidden = !m.active;
+    if (el.maintenanceMessage) {
+      el.maintenanceMessage.textContent = m.message ||
+        "Chat is paused for maintenance. New messages cannot be sent.";
+    }
+  }
+  // Disable composer + reply input when paused (admins keep theirs enabled
+  // so they can post status updates and rotate keys).
+  const lock = m.active && !isAdmin();
+  const composer = document.getElementById("input-message");
+  const sendBtn = document.getElementById("btn-send");
+  const threadInput = document.getElementById("input-thread-message");
+  if (composer) composer.disabled = lock;
+  if (sendBtn) sendBtn.disabled = lock;
+  if (threadInput) threadInput.disabled = lock;
+}
+
+function renderMaintenanceControls() {
+  const m = state.maintenance || {};
+  if (el.toggleMaintenance) el.toggleMaintenance.checked = !!m.active;
+  if (el.toggleSigninLockdown) el.toggleSigninLockdown.checked = !!m.signInDisabled;
+  if (el.inputMaintenanceMsg) el.inputMaintenanceMsg.value = m.message || "";
+}
+
+async function writeMaintenance(patch) {
+  const data = {
+    active: state.maintenance?.active || false,
+    signInDisabled: state.maintenance?.signInDisabled || false,
+    message: state.maintenance?.message || "",
+    ...patch,
+    updatedAt: serverTimestamp(),
+    updatedByUid: state.user.uid,
+  };
+  await setDoc(doc(db, "config", "maintenance"), data, { merge: true });
 }
 
 // --- Users subscription (for member pickers + DM discovery) ---
@@ -3012,6 +3100,7 @@ function renderAdminDialog() {
     }
   }
   renderBansList();
+  renderMaintenanceControls();
 }
 
 function renderBansList() {
@@ -4390,9 +4479,192 @@ function maybeNotify(ch, m) {
 }
 
 // ===========================================================================
+// Invite-password gate
+// ---------------------------------------------------------------------------
+// First-time visitors enter a shared password before the sign-in screen is
+// shown. The hash lives in Firestore at config/invite.hash (public read so
+// the gate works pre-auth) and is rotatable by admins. localStorage stores
+// the last hash the visitor cleared; mismatch against the current hash forces
+// re-entry (which is how rotation broadcasts).
+// ===========================================================================
+
+const INVITE_PASSED_KEY = "brsInvitePassedHash";
+
+// Gate state lifecycle:
+//   "checking" — initial; auth listener waits on `gateResolved` before any UI
+//   "open"     — gate cleared (or no gate configured) — sign-in / chat allowed
+//   "closed"   — gate not yet cleared — only the invite screen is shown
+let gateState = "checking";
+let _gateResolve;
+const gateResolved = new Promise((r) => { _gateResolve = r; });
+
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function fetchInviteHash() {
+  try {
+    const snap = await getDoc(doc(db, "config", "invite"));
+    return snap.exists() ? (snap.data().hash || "") : "";
+  } catch (e) {
+    console.warn("Could not read config/invite (gate disabled):", e);
+    return "";
+  }
+}
+
+// Decides gate state and resolves the gateResolved promise so the auth
+// observer can proceed.
+async function checkInviteGate() {
+  const currentHash = await fetchInviteHash();
+  if (!currentHash) {
+    gateState = "open";  // no gate configured
+    _gateResolve();
+    return;
+  }
+  const stored = localStorage.getItem(INVITE_PASSED_KEY);
+  if (stored && stored === currentHash) {
+    gateState = "open";
+    _gateResolve();
+    return;
+  }
+  // Else: gate must be cleared.
+  gateState = "closed";
+  el.inviteScreen._currentHash = currentHash;
+  showScreen("invite");
+  setTimeout(() => el.inputInvite?.focus(), 50);
+  _gateResolve();
+}
+
+el.formInvite?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  el.inviteError.hidden = true;
+  const entered = el.inputInvite.value;
+  if (!entered) return;
+  const expected = el.inviteScreen._currentHash || (await fetchInviteHash());
+  const actual = await sha256Hex(entered);
+  if (actual === expected) {
+    localStorage.setItem(INVITE_PASSED_KEY, expected);
+    el.inputInvite.value = "";
+    gateState = "open";
+    // Re-run the auth observer's logic with the current user. If signed in
+    // already, this jumps straight into chat; otherwise it shows the sign-in
+    // screen.
+    await processAuthState(auth.currentUser);
+  } else {
+    el.inviteError.textContent = "Wrong password.";
+    el.inviteError.hidden = false;
+  }
+});
+
+// ===========================================================================
+// Maintenance — admin emergency controls
+// ===========================================================================
+
+function setMaintenanceStatus(text, isError) {
+  if (!el.maintenanceStatus) return;
+  el.maintenanceStatus.textContent = text;
+  el.maintenanceStatus.style.color = isError ? "var(--danger)" : "";
+}
+
+el.toggleMaintenance?.addEventListener("change", async () => {
+  if (!isAdmin()) { el.toggleMaintenance.checked = !el.toggleMaintenance.checked; return; }
+  try {
+    await writeMaintenance({ active: el.toggleMaintenance.checked });
+    setMaintenanceStatus(el.toggleMaintenance.checked ? "Read-only mode ON." : "Read-only mode OFF.");
+  } catch (err) {
+    el.toggleMaintenance.checked = !el.toggleMaintenance.checked;
+    setMaintenanceStatus("Failed: " + err.message, true);
+  }
+});
+
+el.toggleSigninLockdown?.addEventListener("change", async () => {
+  if (!isAdmin()) { el.toggleSigninLockdown.checked = !el.toggleSigninLockdown.checked; return; }
+  try {
+    await writeMaintenance({ signInDisabled: el.toggleSigninLockdown.checked });
+    setMaintenanceStatus(el.toggleSigninLockdown.checked ? "Sign-in lockdown ON." : "Sign-in lockdown OFF.");
+  } catch (err) {
+    el.toggleSigninLockdown.checked = !el.toggleSigninLockdown.checked;
+    setMaintenanceStatus("Failed: " + err.message, true);
+  }
+});
+
+el.inputMaintenanceMsg?.addEventListener("change", async () => {
+  if (!isAdmin()) return;
+  try {
+    await writeMaintenance({ message: el.inputMaintenanceMsg.value.trim() });
+    setMaintenanceStatus("Banner message updated.");
+  } catch (err) {
+    setMaintenanceStatus("Failed: " + err.message, true);
+  }
+});
+
+el.btnPauseNow?.addEventListener("click", async () => {
+  if (!isAdmin()) return;
+  if (!confirm("PAUSE the chat now?\n\nAll non-admin writes will be blocked and new sign-ins rejected. Existing sessions stay active until they sign out.")) return;
+  try {
+    await writeMaintenance({
+      active: true,
+      signInDisabled: true,
+      message: el.inputMaintenanceMsg?.value.trim() || "Chat paused — investigating.",
+    });
+    setMaintenanceStatus("PAUSED. Read-only + sign-in lockdown active.");
+  } catch (err) {
+    setMaintenanceStatus("Failed: " + err.message, true);
+  }
+});
+
+el.btnResumeNow?.addEventListener("click", async () => {
+  if (!isAdmin()) return;
+  if (!confirm("Resume normal operation?")) return;
+  try {
+    await writeMaintenance({ active: false, signInDisabled: false, message: "" });
+    setMaintenanceStatus("Resumed. Chat is fully operational.");
+  } catch (err) {
+    setMaintenanceStatus("Failed: " + err.message, true);
+  }
+});
+
+// Admin panel: rotate invite password.
+el.btnRotateInvite?.addEventListener("click", async () => {
+  if (!isAdmin()) return;
+  const newPw = (el.inputNewInvite?.value || "").trim();
+  el.inviteRotateStatus.textContent = "";
+  el.inviteRotateStatus.style.color = "";
+  try {
+    if (!newPw) {
+      // Empty = disable gate.
+      if (!confirm("Disable the invite gate? Anyone with the URL will reach the sign-in screen.")) return;
+      await setDoc(doc(db, "config", "invite"), { hash: "", updatedAt: serverTimestamp() }, { merge: true });
+      el.inviteRotateStatus.textContent = "Gate disabled.";
+    } else {
+      if (newPw.length < 6) {
+        el.inviteRotateStatus.textContent = "Password too short (min 6 chars).";
+        el.inviteRotateStatus.style.color = "var(--danger)";
+        return;
+      }
+      const hash = await sha256Hex(newPw);
+      await setDoc(doc(db, "config", "invite"), { hash, updatedAt: serverTimestamp() }, { merge: true });
+      // Keep the admin themself signed in by storing the new hash.
+      localStorage.setItem(INVITE_PASSED_KEY, hash);
+      el.inviteRotateStatus.textContent = "Updated. All other devices will be asked for the new password on next visit.";
+    }
+    if (el.inputNewInvite) el.inputNewInvite.value = "";
+  } catch (err) {
+    el.inviteRotateStatus.textContent = "Failed: " + err.message;
+    el.inviteRotateStatus.style.color = "var(--danger)";
+  }
+});
+
+// ===========================================================================
 // Bootstrap
 // ===========================================================================
 
 (async function bootstrap() {
+  // 1. Email-link callback first (must run regardless of gate so the URL is
+  //    not stranded if a user clicks the link from a fresh device).
   await handleEmailLinkReturn();
+  // 2. Gate. If passed, onAuthStateChanged will route to signin/profile/chat.
+  //    If not passed, invite screen is shown until they clear it.
+  await checkInviteGate();
 })();

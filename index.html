@@ -9,6 +9,20 @@
 </head>
 <body>
 
+  <!-- Invite-password gate (shown on first visit before sign-in) -->
+  <section id="invite-screen" class="screen" hidden>
+    <div class="signin-card">
+      <h1>BRS Community</h1>
+      <p class="muted">Enter the invite password to continue.</p>
+      <form id="form-invite" novalidate>
+        <input type="password" id="input-invite" placeholder="Invite password" required autocomplete="off">
+        <button type="submit" class="primary-btn">Continue</button>
+        <p id="invite-error" class="error" role="alert" aria-live="assertive" hidden></p>
+        <p class="hint">Ask the BRS organizers if you don't have it yet.</p>
+      </form>
+    </div>
+  </section>
+
   <!-- Sign-in screen -->
   <section id="signin-screen" class="screen" hidden>
     <div class="signin-card">
@@ -58,6 +72,12 @@
       </form>
     </div>
   </section>
+
+  <!-- Maintenance banner: shown across screens when config/maintenance.active is true -->
+  <div id="maintenance-banner" class="maintenance-banner" hidden role="status" aria-live="polite">
+    <span class="maintenance-icon" aria-hidden="true">⏸</span>
+    <span id="maintenance-message">Chat is paused for maintenance. New messages cannot be sent.</span>
+  </div>
 
   <!-- Main chat -->
   <section id="chat-screen" class="screen chat-layout" hidden>
@@ -277,6 +297,37 @@
         <legend>Banned users</legend>
         <p class="hint">Banned users are signed out, removed from every channel, and blocked from signing back in. Unban to restore access (they auto-rejoin #general on next sign-in; other channels need re-invite).</p>
         <div id="bans-list"></div>
+      </fieldset>
+
+      <fieldset class="notif-group">
+        <legend>Invite password</legend>
+        <p class="hint">All visitors must enter this password before they can see the sign-in screen. Rotate it whenever it leaks. Empty = gate disabled (open to anyone with the URL).</p>
+        <label>
+          New invite password
+          <input type="text" id="input-new-invite" placeholder="leave empty to disable gate" autocomplete="off">
+        </label>
+        <button type="button" id="btn-rotate-invite" class="secondary-btn" style="width:auto; padding:6px 14px; margin-top:6px">Rotate password</button>
+        <p id="invite-rotate-status" class="hint" style="margin-top:6px"></p>
+      </fieldset>
+
+      <fieldset class="notif-group">
+        <legend>Emergency controls</legend>
+        <p class="hint">Halt activity if the chat is being abused. Read-only mode keeps existing messages visible but blocks new posts. Sign-in lockdown blocks new sessions; existing tabs keep their token until it refreshes (max 1 hour).</p>
+        <label class="toggle-row">
+          <input type="checkbox" id="toggle-maintenance"> Read-only mode (pause writes)
+        </label>
+        <label class="toggle-row">
+          <input type="checkbox" id="toggle-signin-lockdown"> Block new sign-ins
+        </label>
+        <label>
+          Banner message (optional)
+          <input type="text" id="input-maintenance-msg" placeholder="Chat is paused for maintenance.">
+        </label>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px">
+          <button type="button" id="btn-pause-now" class="remove-btn" style="width:auto">PAUSE CHAT NOW</button>
+          <button type="button" id="btn-resume-now" class="secondary-btn" style="width:auto; padding:6px 14px">Resume normal operation</button>
+        </div>
+        <p id="maintenance-status" class="hint" style="margin-top:6px"></p>
       </fieldset>
 
       <div class="dialog-actions">

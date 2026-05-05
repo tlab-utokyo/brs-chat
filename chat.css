@@ -1423,3 +1423,37 @@ dialog {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* Maintenance banner — shown when config/maintenance.active is true */
+.maintenance-banner {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: linear-gradient(90deg, #ff9900, #ff6600);
+  color: #fff;
+  font-weight: 600;
+  font-size: 14px;
+  text-align: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+.maintenance-banner .maintenance-icon {
+  font-size: 18px;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.25));
+}
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  cursor: pointer;
+  font-weight: 500;
+}
+.toggle-row input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
