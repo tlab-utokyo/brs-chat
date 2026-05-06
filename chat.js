@@ -1886,9 +1886,7 @@ function renderMessage(m, channelId) {
   linkBtn.addEventListener("click", () => copyPermalink(channelId, m.id));
   actions.appendChild(linkBtn);
 
-  const now = Date.now();
-  const createdMs = m.createdAt?.toMillis?.() ?? 0;
-  if (isOwn && m.text && !m.deleted && (now - createdMs) < 5 * 60 * 1000) {
+  if (isOwn && m.text && !m.deleted) {
     const editBtn = document.createElement("button");
     editBtn.type = "button";
     editBtn.textContent = "Edit";
