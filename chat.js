@@ -4357,19 +4357,40 @@ el.formNotifPrefs?.addEventListener("submit", async (e) => {
 // user has no tabs open.
 // ===========================================================================
 
+// Absolute URL to the BRS logo so external services (Slack/Discord) can fetch
+// it as a webhook avatar. Uses the page's origin so this Just Works in both
+// the tlab staging deploy and the eventual biohybrid-robotics.com production.
+function chatLogoUrl() {
+  return window.location.origin
+    + window.location.pathname.replace(/[^/]*$/, "")
+    + "logo.png";
+}
+
+const WEBHOOK_BOT_NAME = "BRS Community Chat";
+
 async function postWebhook(url, text) {
   if (!url) return;
   try {
     if (url.includes("hooks.slack.com")) {
       // Slack accepts CORS form-encoded POSTs with a `payload` param.
-      const body = new URLSearchParams({ payload: JSON.stringify({ text }) });
+      const payload = {
+        text,
+        username: WEBHOOK_BOT_NAME,
+        icon_url: chatLogoUrl(),
+      };
+      const body = new URLSearchParams({ payload: JSON.stringify(payload) });
       await fetch(url, { method: "POST", body, mode: "no-cors" });
     } else if (url.includes("discord.com/api/webhooks") || url.includes("discordapp.com/api/webhooks")) {
       // Discord accepts form-urlencoded content= for simple messages.
-      const body = new URLSearchParams({ content: text });
+      const body = new URLSearchParams({
+        content: text,
+        username: WEBHOOK_BOT_NAME,
+        avatar_url: chatLogoUrl(),
+      });
       await fetch(url, { method: "POST", body, mode: "no-cors" });
     } else {
-      // Teams (and generic) — expect JSON body.
+      // Teams (and generic) — expect JSON body. Standard Teams connector
+      // doesn't support per-message icon override, so we just send text.
       await fetch(url, {
         method: "POST",
         mode: "no-cors",
