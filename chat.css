@@ -161,8 +161,8 @@ a:hover { text-decoration: underline; }
   min-width: 0;
 }
 .signin-logo {
-  width: 40px;
-  height: 40px;
+  width: 80px;
+  height: 80px;
   object-fit: contain;
   flex: 0 0 auto;
 }
