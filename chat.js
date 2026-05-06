@@ -4496,6 +4496,13 @@ async function tryClaimWebhook(uid, messageId) {
 }
 
 async function forwardToWebhooks({ kind, ch, m, permalink }) {
+  // Phase A: server-side Cloud Function (forwardWebhookOnNewMessage in
+  // functions/src/forwardWebhook.ts) now handles fan-out so the chat tab
+  // doesn't have to be open for Slack notifications. We early-return here
+  // to avoid double-sending; the client-side path is kept for reference
+  // but does nothing.
+  return;
+  // eslint-disable-next-line no-unreachable
   const w = getNotifPrefs().webhooks || {};
   const hasAny = w.slack || w.teams || w.discord;
   const isReply = !!m.isReply;
