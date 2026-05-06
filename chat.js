@@ -269,6 +269,9 @@ const el = {
   lightbox: $("lightbox"),
   lightboxImg: $("lightbox-img"),
   btnLightboxClose: $("btn-lightbox-close"),
+  btnLightboxPrev: $("btn-lightbox-prev"),
+  btnLightboxNext: $("btn-lightbox-next"),
+  lightboxCounter: $("lightbox-counter"),
   fatalError: $("fatal-error"),
 };
 
@@ -1629,25 +1632,26 @@ function renderMessageAttachments(m, body) {
   const images = atts.filter((a) => a.kind === "image");
   const files = atts.filter((a) => a.kind === "file");
 
+  const imageUrls = images.map((im) => im.url);
   if (images.length === 1) {
     const img = document.createElement("img");
     img.className = "message-image";
     img.loading = "lazy";
     img.src = images[0].thumbUrl || images[0].url;
     img.alt = "attached image";
-    img.addEventListener("click", () => openLightbox(images[0].url));
+    img.addEventListener("click", () => openLightbox(imageUrls, 0));
     body.appendChild(img);
   } else if (images.length > 1) {
     const grid = document.createElement("div");
     grid.className = "message-images " + (images.length === 2 ? "cols-2" : "cols-3");
-    for (const im of images) {
+    images.forEach((im, idx) => {
       const img = document.createElement("img");
       img.loading = "lazy";
       img.src = im.thumbUrl || im.url;
       img.alt = "attached image";
-      img.addEventListener("click", () => openLightbox(im.url));
+      img.addEventListener("click", () => openLightbox(imageUrls, idx));
       grid.appendChild(img);
-    }
+    });
     body.appendChild(grid);
   }
 
@@ -2631,18 +2635,56 @@ async function uploadAttachment(att, channelId) {
 
 // ===========================================================================
 // Lightbox
+//   openLightbox(urlOrUrls, index?) — string opens a single image; an array
+//   opens a gallery starting at `index` with prev/next + ←/→ keyboard nav.
 // ===========================================================================
 
-function openLightbox(url) {
-  el.lightboxImg.src = url;
+const lightboxState = { urls: [], index: 0 };
+
+function openLightbox(urlOrUrls, index) {
+  lightboxState.urls = Array.isArray(urlOrUrls) ? urlOrUrls.slice() : [urlOrUrls];
+  lightboxState.index = Math.max(0, Math.min(lightboxState.urls.length - 1, index || 0));
+  showLightboxAtIndex(lightboxState.index);
   el.lightbox.showModal();
 }
+
+function showLightboxAtIndex(i) {
+  const total = lightboxState.urls.length;
+  if (total === 0) return;
+  lightboxState.index = (i + total) % total;
+  el.lightboxImg.src = lightboxState.urls[lightboxState.index];
+  const multi = total > 1;
+  el.btnLightboxPrev.hidden = !multi;
+  el.btnLightboxNext.hidden = !multi;
+  el.lightboxCounter.hidden = !multi;
+  if (multi) {
+    el.lightboxCounter.textContent = `${lightboxState.index + 1} / ${total}`;
+  }
+}
+
 el.btnLightboxClose.addEventListener("click", () => el.lightbox.close());
+el.btnLightboxPrev.addEventListener("click", (e) => {
+  e.stopPropagation();
+  showLightboxAtIndex(lightboxState.index - 1);
+});
+el.btnLightboxNext.addEventListener("click", (e) => {
+  e.stopPropagation();
+  showLightboxAtIndex(lightboxState.index + 1);
+});
 el.lightbox.addEventListener("click", (e) => {
-  // Close on backdrop click.
+  // Close on backdrop click (image / nav buttons stop propagation above).
   if (e.target === el.lightbox) el.lightbox.close();
 });
-el.lightbox.addEventListener("close", () => { el.lightboxImg.src = ""; });
+el.lightbox.addEventListener("keydown", (e) => {
+  if (lightboxState.urls.length <= 1) return;
+  if (e.key === "ArrowLeft")  { e.preventDefault(); showLightboxAtIndex(lightboxState.index - 1); }
+  if (e.key === "ArrowRight") { e.preventDefault(); showLightboxAtIndex(lightboxState.index + 1); }
+});
+el.lightbox.addEventListener("close", () => {
+  el.lightboxImg.src = "";
+  lightboxState.urls = [];
+  lightboxState.index = 0;
+});
 
 // ===========================================================================
 // New channel dialog
