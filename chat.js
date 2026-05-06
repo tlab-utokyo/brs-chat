@@ -162,7 +162,6 @@ const el = {
   inputSearch: $("input-search"),
   searchCount: $("search-count"),
   btnSearchClose: $("btn-search-close"),
-  btnSearch: $("btn-search"),
   typingIndicator: $("typing-indicator"),
   // Thread
   threadPanel: $("thread-panel"),
@@ -244,7 +243,6 @@ const el = {
   mentionsViewList: $("mentions-view-list"),
   btnMentionsViewClose: $("btn-mentions-close"),
   // Poll
-  btnPoll: $("btn-poll"),
   dialogPoll: $("dialog-poll"),
   formPoll: $("form-poll"),
   pollQuestion: $("poll-question"),
@@ -2339,6 +2337,16 @@ el.formCompose.addEventListener("submit", async (e) => {
   if (!text && !hasAttachments) return;
   if (!state.currentChannelId) return;
 
+  // Slash commands — intercept before treating the input as a message.
+  // Lets users open the poll dialog or search bar without dedicated icon
+  // buttons cluttering the composer.
+  if (!hasAttachments && handleSlashCommand(text)) {
+    el.inputMessage.value = "";
+    state.draftsByChannel.delete(state.currentChannelId);
+    autoResizeTextarea(el.inputMessage);
+    return;
+  }
+
   const channelId = state.currentChannelId;
   const { mentionUids, mentionsEveryone } = parseMentions(text);
   const msg = {
@@ -3744,7 +3752,6 @@ function closeSearch() {
     renderMessages(state.currentMessages, state.currentChannelId);
   }
 }
-el.btnSearch.addEventListener("click", openSearch);
 el.btnSearchClose.addEventListener("click", closeSearch);
 el.inputSearch.addEventListener("input", () => {
   state.searchQuery = el.inputSearch.value;
@@ -3758,7 +3765,43 @@ el.inputSearch.addEventListener("keydown", (e) => {
 // #5 Polls
 // ===========================================================================
 
-el.btnPoll.addEventListener("click", openPollDialog);
+// Slash commands typed into the composer. Returns true if `text` matched a
+// known command and was handled (caller clears input); false otherwise so
+// the message is sent normally.
+function handleSlashCommand(text) {
+  const m = text.match(/^\/([a-z?]+)\b\s*(.*)$/i);
+  if (!m) return false;
+  const cmd = m[1].toLowerCase();
+  const arg = m[2];
+  switch (cmd) {
+    case "poll":
+      openPollDialog();
+      if (arg) el.pollQuestion.value = arg;
+      return true;
+    case "search":
+    case "look":
+    case "find":
+      openSearch();
+      if (arg) {
+        el.inputSearch.value = arg;
+        state.searchQuery = arg;
+        renderMessages(state.currentMessages, state.currentChannelId);
+      }
+      return true;
+    case "help":
+    case "?":
+      alert([
+        "Slash commands:",
+        "  /poll [question]     — create a poll",
+        "  /search [query]      — search this channel (alias: /look, /find)",
+        "  /help                — this help",
+      ].join("\n"));
+      return true;
+    default:
+      return false;  // unknown command — send as a normal message
+  }
+}
+
 function openPollDialog() {
   el.pollQuestion.value = "";
   el.pollOptions.value = "";
