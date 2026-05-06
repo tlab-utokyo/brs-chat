@@ -99,6 +99,41 @@ a:hover { text-decoration: underline; }
   margin-top: 0;
 }
 
+/* Terms-of-use box on the invite gate — wider card so the bulleted list
+   is readable, with an internal scroll if the screen is short. */
+.invite-card { max-width: 560px; }
+.terms-box {
+  background: var(--surface-2);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  max-height: 38vh;
+  overflow-y: auto;
+  margin-bottom: 14px;
+}
+.terms-box p { margin-bottom: 6px; }
+.terms-box ul {
+  margin: 4px 0 0 18px;
+  padding: 0;
+}
+.terms-box li { margin-bottom: 6px; }
+.terms-box li:last-child { margin-bottom: 0; }
+
+.terms-agree {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  user-select: none;
+}
+.terms-agree input[type="checkbox"] {
+  margin-top: 3px;
+  flex: 0 0 auto;
+}
+
 .signin-card {
   background: var(--surface);
   border: 1px solid var(--border-color);

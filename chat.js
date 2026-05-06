@@ -4951,6 +4951,13 @@ async function checkInviteGate() {
 el.formInvite?.addEventListener("submit", async (e) => {
   e.preventDefault();
   el.inviteError.hidden = true;
+  // Form has novalidate so we must enforce the agreement checkbox in JS.
+  const agreeBox = document.getElementById("input-invite-agree");
+  if (agreeBox && !agreeBox.checked) {
+    el.inviteError.textContent = "ご利用には上記への同意が必要です。";
+    el.inviteError.hidden = false;
+    return;
+  }
   const entered = el.inputInvite.value;
   if (!entered) return;
   const expected = el.inviteScreen._currentHash || (await fetchInviteHash());
