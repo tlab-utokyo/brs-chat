@@ -136,6 +136,12 @@ a:hover { text-decoration: underline; }
 }
 .secondary-btn:hover { background: var(--surface-2); }
 
+.dm-self-btn {
+  margin: 4px 0 8px;
+  text-align: left;
+  justify-content: flex-start;
+}
+
 .icon-btn {
   background: transparent;
   border: 0;

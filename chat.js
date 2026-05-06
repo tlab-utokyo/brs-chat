@@ -134,6 +134,7 @@ const el = {
   dmMemberList: $("dm-member-list"),
   btnNewDmCancel: $("btn-new-dm-cancel"),
   btnNewDmStart: $("btn-new-dm-start"),
+  btnNewDmSelf: $("btn-new-dm-self"),
   newDmError: $("new-dm-error"),
   dmFilter: $("dm-filter"),
   dialogNewReaction: $("dialog-new-reaction"),
@@ -1252,6 +1253,7 @@ function renderDmRow(ch, hidden) {
 
 function isOrphanDm(ch) {
   if (ch?.type !== "dm") return false;
+  if (isSelfDm(ch)) return false;  // Notes-to-self is intentionally [me] only
   const members = ch.members || [];
   if (members.length < 2) return true;  // only me left
   const others = members.filter((u) => u !== state.user.uid);
@@ -1286,7 +1288,8 @@ function renderChannelSection(container, channels, kind) {
     let dmUser = null;
     if (kind === "dm") {
       const others = getDmOthers(ch);
-      dmUser = others[0] || null;  // for the avatar slot
+      // For self-DM, show my own avatar in the slot.
+      dmUser = isSelfDm(ch) ? getUserByUid(state.user.uid) : (others[0] || null);
       label = dmLabel(ch);
       prefix = "";
       // Group DM marker — small icon next to the name.
@@ -1367,6 +1370,13 @@ function getDmOthers(ch) {
     .filter(Boolean);
 }
 
+// Self-DM = "Notes" channel: members is exactly [me]. Used as a personal memo.
+function isSelfDm(ch) {
+  if (ch?.type !== "dm") return false;
+  const m = ch.members || [];
+  return m.length === 1 && m[0] === state.user?.uid;
+}
+
 // User-managed hide list — DMs the user clicked × on. Stored on
 // users/{uid}.hiddenDms. Hiding only affects this user's sidebar; the
 // channel doc + history are untouched and the other party is unaffected.
@@ -1399,6 +1409,7 @@ async function unhideDm(channelId) {
 
 // Comma-joined display label for a DM channel (works for 1:1 and group DMs).
 function dmLabel(ch) {
+  if (isSelfDm(ch)) return "Notes (you)";
   const others = getDmOthers(ch);
   if (others.length === 0) return "(dm)";
   if (others.length === 1) return others[0].displayName || others[0].email || "(unknown)";
@@ -1430,7 +1441,9 @@ function selectChannel(channelId) {
   let titlePrefix = "#";
   if (ch.type === "dm") {
     titleText = dmLabel(ch);
-    titlePrefix = getDmOthers(ch).length > 1 ? "" : "@";
+    // Group DMs and self-DMs render without an "@" — the label already reads
+    // standalone ("Alice, Bob +2", "Notes (you)").
+    titlePrefix = (isSelfDm(ch) || getDmOthers(ch).length > 1) ? "" : "@";
   }
   el.currentChannelName.textContent = titleText;
   const titleHash = document.querySelector(".chat-title .channel-hash");
@@ -2558,6 +2571,11 @@ el.dmFilter?.addEventListener("input", () => {
 });
 el.btnNewDmCancel.addEventListener("click", () => el.dialogNewDm.close());
 
+el.btnNewDmSelf?.addEventListener("click", async () => {
+  el.dialogNewDm.close();
+  await openOrCreateSelfDm();
+});
+
 el.btnNewDmStart?.addEventListener("click", async () => {
   if (el.newDmError) el.newDmError.hidden = true;
   // The picker auto-checks self (disabled checkbox); exclude that uid.
@@ -2681,6 +2699,36 @@ function showUserProfile(uid) {
 }
 
 el.btnUserProfileClose?.addEventListener("click", () => el.dialogUserProfile?.close());
+
+// Notes-to-self channel: members is just [me]. Used as a personal memo space.
+// Distinct id namespace ("dm_notes_<uid>") so it can't collide with a degenerate
+// 1:1 dm key.
+async function openOrCreateSelfDm() {
+  const myUid = state.user.uid;
+  const dmKey = "dm_notes_" + myUid;
+  const existing = state.channels.find((c) => c.id === dmKey);
+  if (existing) {
+    if (getMyHiddenDms().includes(dmKey)) await unhideDm(dmKey);
+    selectChannel(dmKey);
+    return;
+  }
+  try {
+    await setDoc(doc(db, "channels", dmKey), {
+      name: "dm",
+      description: "",
+      type: "dm",
+      members: [myUid],
+      createdByUid: myUid,
+      createdAt: serverTimestamp(),
+      lastMessageAt: serverTimestamp(),
+      isDefault: false,
+      archived: false,
+    });
+    selectChannelWhenReady(dmKey);
+  } catch (err) {
+    alert("Failed to open Notes: " + err.message);
+  }
+}
 
 async function openOrCreateDm(otherUid) {
   const myUid = state.user.uid;
