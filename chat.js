@@ -1661,10 +1661,10 @@ function renderMessageAttachments(m, body) {
     for (const f of files) {
       const a = document.createElement("a");
       a.className = "message-file";
-      a.href = f.url;
+      const ext = (f.ext || (f.name || "").split(".").pop() || "").toLowerCase();
+      a.href = fileViewerUrl(f.url, ext);
       a.target = "_blank";
       a.rel = "noopener noreferrer";
-      const ext = (f.ext || (f.name || "").split(".").pop() || "").toLowerCase();
       a.innerHTML =
         `<span class="file-icon">${fileEmoji(ext)}</span>` +
         `<span class="file-name"></span>` +
@@ -1674,6 +1674,20 @@ function renderMessageAttachments(m, body) {
     }
     body.appendChild(wrap);
   }
+}
+
+const OFFICE_VIEWABLE = new Set(["doc", "docx", "xls", "xlsx", "ppt", "pptx"]);
+
+// Office docs (.docx etc.) get an inline preview via Microsoft's free Office
+// Online viewer — it fetches the asset server-side from the public Cloudinary
+// URL and renders it in an iframe page. PDF/text fall back to the raw URL,
+// which the browser already renders inline. Zip stays a direct download.
+function fileViewerUrl(url, ext) {
+  if (!url) return url;
+  if (OFFICE_VIEWABLE.has(ext)) {
+    return `https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(url)}`;
+  }
+  return url;
 }
 
 function renderMessage(m, channelId) {
