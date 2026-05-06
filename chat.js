@@ -158,10 +158,8 @@ const el = {
   btnPinnedToggle: $("btn-pinned-toggle"),
   pinnedCount: $("pinned-count"),
   pinnedList: $("pinned-list"),
-  searchBar: $("search-bar"),
   inputSearch: $("input-search"),
   searchCount: $("search-count"),
-  btnSearchClose: $("btn-search-close"),
   typingIndicator: $("typing-indicator"),
   // Thread
   threadPanel: $("thread-panel"),
@@ -3739,20 +3737,22 @@ el.formThreadCompose.addEventListener("submit", async (e) => {
 // #3 Search (incremental, current channel)
 // ===========================================================================
 
+// The header search input is always visible. openSearch focuses it; the
+// `/` keyboard shortcut and the `/search` slash command both go through
+// here. closeSearch clears the query and unfocuses.
 function openSearch() {
-  el.searchBar.hidden = false;
   el.inputSearch.focus();
   el.inputSearch.select();
 }
 function closeSearch() {
-  el.searchBar.hidden = true;
   if (state.searchQuery) {
     state.searchQuery = "";
+    el.inputSearch.value = "";
     el.searchCount.textContent = "";
     renderMessages(state.currentMessages, state.currentChannelId);
   }
+  el.inputSearch.blur();
 }
-el.btnSearchClose.addEventListener("click", closeSearch);
 el.inputSearch.addEventListener("input", () => {
   state.searchQuery = el.inputSearch.value;
   renderMessages(state.currentMessages, state.currentChannelId);
@@ -4115,7 +4115,7 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.key === "Escape") {
     if (el.dialogSwitcher.open) el.dialogSwitcher.close();
-    if (!el.searchBar.hidden) { closeSearch(); return; }
+    if (state.searchQuery) { closeSearch(); return; }
     if (!el.threadPanel.hidden) { closeThread(); return; }
   }
   if (!inInput && e.key === "/") {

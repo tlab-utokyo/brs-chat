@@ -865,14 +865,34 @@ a.brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; b
 .pinned-item-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pinned-item-author { color: var(--text-muted); font-size: 0.75rem; }
 
-/* Search bar */
-.search-bar {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 12px; border-bottom: 1px solid var(--border-color); background: var(--surface);
+/* Header search — Slack-style channel search to the left of the user menu. */
+.header-search {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 280px;
+  min-width: 0;
 }
-.search-bar[hidden] { display: none !important; }
-.search-bar input { flex: 1; padding: 6px 10px; }
-.search-count { font-size: 0.75rem; color: var(--text-muted); }
+.header-search .header-search-icon {
+  position: absolute;
+  left: 8px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.header-search input[type="search"] {
+  width: 100%;
+  padding: 6px 10px 6px 28px;
+  font-size: 0.85rem;
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+.search-count {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-left: 6px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
 
 /* Typing indicator */
 .typing-indicator {
@@ -1517,6 +1537,9 @@ a.brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; b
     white-space: nowrap;
   }
   .chat-header-spacer { display: none; }
+  /* Hide channel search on mobile (header has no room). Use /search slash
+     command from the composer instead. */
+  .header-search { display: none; }
 
   /* Member count: icon only (drop the number), tighter padding */
   .members-btn { padding: 6px 6px; }
