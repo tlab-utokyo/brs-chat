@@ -1323,6 +1323,15 @@ a.brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; b
   .user-btn #user-menu-name > span:not(.avatar) { display: none; }
   .user-btn .avatar { width: 28px; height: 28px; font-size: 0.75rem; }
 
+  /* Header has overflow:hidden as a safety net, which would clip an
+     absolutely-positioned dropdown. Pin it to the viewport instead. */
+  .dropdown {
+    position: fixed;
+    top: 52px;
+    right: 8px;
+    z-index: 200;
+  }
+
   /* --- Composer compaction: narrower Send, tighter icon buttons --- */
   .composer { padding: 8px 6px 10px; gap: 6px; }
   .composer .primary-btn { padding: 10px 14px; font-size: 0.9rem; }
