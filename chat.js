@@ -4448,25 +4448,17 @@ async function forwardToWebhooks({ kind, ch, m, permalink }) {
     console.log("[webhook dedup] skipped — another tab already claimed", m.id);
     return;
   }
-  // Bot avatar/name already says "BRS Community Chat", so the heading just
-  // needs the kind + context. DMs put the author in the heading and skip it
-  // in the body (no `Hanako: …` echo of the same name).
-  const chLabel = ch.type === "team" ? `🔒${ch.name}` : `#${ch.name}`;
-  const replyTag = isReply ? " (reply)" : "";
-  let heading;
-  if (kind === "dm") {
-    heading = `*DM from ${m.authorName}${replyTag}*`;
-  } else if (kind === "mention") {
-    heading = `*@mention in ${chLabel}${replyTag}*`;
-  } else if (kind === "channel") {
-    heading = `*@channel in ${chLabel}${replyTag}*`;
-  } else if (isReply) {
-    heading = `*Reply in ${chLabel}*`;
-  } else {
-    heading = `*${chLabel}*`;
-  }
+  const chLabel = ch.type === "dm"
+    ? `DM from ${m.authorName}`
+    : (ch.type === "team" ? `🔒${ch.name}` : `#${ch.name}`);
+  const prefix = kind === "mention" ? "@you mentioned"
+    : kind === "channel" ? "@channel"
+    : kind === "dm" ? "DM"
+    : (isReply ? "thread reply" : "message");
+  const threadTag = isReply && kind !== null ? " (thread reply)" : "";
   const snippet = (m.text || (hasAttachment(m) ? "[attachment]" : "[message]")).slice(0, 300);
-  const body = kind === "dm" ? snippet : `${m.authorName}: ${snippet}`;
+  const heading = `*BRS Community — ${prefix}${threadTag}* in ${chLabel}`;
+  const body = `${m.authorName}: ${snippet}`;
   // Inline the labeled permalink at the end of the heading line so the
   // forwarded message is two lines (heading + Open in Chat / body) instead
   // of three with a dangling URL.
