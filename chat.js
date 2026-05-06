@@ -2327,8 +2327,9 @@ async function attachFile(file) {
 
   if (!isHeic) {
     // Client-side compression via canvas for JPEG/PNG/WebP.
+    // Target ≤1MB to bound Cloudinary ingest bandwidth.
     try {
-      const res = await compressImage(file, 1600, 0.82);
+      const res = await compressImage(file, 1600, 0.82, 1024 * 1024);
       blob = res.blob;
       width = res.width;
       height = res.height;
@@ -2366,7 +2367,7 @@ function formatBytes(n) {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
-async function compressImage(file, maxEdge, quality) {
+async function compressImage(file, maxEdge, quality, targetMaxBytes) {
   const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
   let { width, height } = bitmap;
   const scale = Math.min(1, maxEdge / Math.max(width, height));
@@ -2378,8 +2379,17 @@ async function compressImage(file, maxEdge, quality) {
   const ctx = canvas.getContext("2d");
   ctx.drawImage(bitmap, 0, 0, width, height);
   bitmap.close?.();
-  const blob = await new Promise((resolve) =>
+  let blob = await new Promise((resolve) =>
     canvas.toBlob(resolve, "image/jpeg", quality));
+  // If over target, step quality down. Floor at 0.5 to keep it legible.
+  if (targetMaxBytes && blob && blob.size > targetMaxBytes) {
+    for (let q = quality - 0.1; q >= 0.5; q -= 0.1) {
+      const next = await new Promise((resolve) =>
+        canvas.toBlob(resolve, "image/jpeg", q));
+      if (next) blob = next;
+      if (next && next.size <= targetMaxBytes) break;
+    }
+  }
   return { blob, width, height };
 }
 
