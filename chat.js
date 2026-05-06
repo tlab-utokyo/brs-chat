@@ -1661,10 +1661,9 @@ function renderMessageAttachments(m, body) {
     for (const f of files) {
       const a = document.createElement("a");
       a.className = "message-file";
-      a.href = f.url;
+      a.href = inlineFileUrl(f.url);
       a.target = "_blank";
       a.rel = "noopener noreferrer";
-      a.download = f.name || "";
       const ext = (f.ext || (f.name || "").split(".").pop() || "").toLowerCase();
       a.innerHTML =
         `<span class="file-icon">${fileEmoji(ext)}</span>` +
@@ -1675,6 +1674,15 @@ function renderMessageAttachments(m, body) {
     }
     body.appendChild(wrap);
   }
+}
+
+// Cloudinary's raw delivery defaults to Content-Disposition: attachment, which
+// makes browsers force-download PDFs etc. Inserting fl_attachment:false flips
+// it back to inline so the browser renders PDFs/text in a new tab. Office docs
+// still trigger a download — browsers can't render them anyway.
+function inlineFileUrl(url) {
+  if (!url || !url.includes("/upload/") || url.includes("fl_attachment")) return url;
+  return url.replace("/upload/", "/upload/fl_attachment:false/");
 }
 
 function renderMessage(m, channelId) {
