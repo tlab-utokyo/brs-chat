@@ -134,7 +134,6 @@ const el = {
   dmMemberList: $("dm-member-list"),
   btnNewDmCancel: $("btn-new-dm-cancel"),
   btnNewDmStart: $("btn-new-dm-start"),
-  btnNewDmSelf: $("btn-new-dm-self"),
   newDmError: $("new-dm-error"),
   dmFilter: $("dm-filter"),
   dialogNewReaction: $("dialog-new-reaction"),
@@ -2560,7 +2559,7 @@ el.formNewTeam.addEventListener("submit", async (e) => {
 
 el.btnNewDm.addEventListener("click", () => {
   if (el.newDmError) el.newDmError.hidden = true;
-  renderMemberPicker(el.dmMemberList, { multi: true });
+  renderMemberPicker(el.dmMemberList, { multi: true, allowSelf: true });
   el.dialogNewDm.showModal();
 });
 
@@ -2571,27 +2570,27 @@ el.dmFilter?.addEventListener("input", () => {
 });
 el.btnNewDmCancel.addEventListener("click", () => el.dialogNewDm.close());
 
-el.btnNewDmSelf?.addEventListener("click", async () => {
-  el.dialogNewDm.close();
-  await openOrCreateSelfDm();
-});
-
 el.btnNewDmStart?.addEventListener("click", async () => {
   if (el.newDmError) el.newDmError.hidden = true;
-  // The picker auto-checks self (disabled checkbox); exclude that uid.
-  const selected = [...el.dmMemberList.querySelectorAll("input[type=checkbox]:checked")]
-    .map((c) => c.value)
-    .filter((u) => u !== state.user.uid);
-  if (selected.length === 0) {
+  const checked = [...el.dmMemberList.querySelectorAll("input[type=checkbox]:checked")]
+    .map((c) => c.value);
+  // Members of the resulting channel = checked ∪ {me}, deduped.
+  // (We always include self so the channel actually appears in my sidebar.)
+  const members = [...new Set([state.user.uid, ...checked])];
+  if (members.length === 0) {
     el.newDmError.textContent = "Pick at least one person.";
     el.newDmError.hidden = false;
     return;
   }
   el.dialogNewDm.close();
-  if (selected.length === 1) {
-    await openOrCreateDm(selected[0]);
+  if (members.length === 1) {
+    // Only me → notes-to-self channel.
+    await openOrCreateDm(state.user.uid);
+  } else if (members.length === 2) {
+    const other = members.find((u) => u !== state.user.uid);
+    await openOrCreateDm(other);
   } else {
-    await createGroupDm(selected);
+    await createGroupDm(members.filter((u) => u !== state.user.uid));
   }
 });
 
@@ -2700,40 +2699,12 @@ function showUserProfile(uid) {
 
 el.btnUserProfileClose?.addEventListener("click", () => el.dialogUserProfile?.close());
 
-// Notes-to-self channel: members is just [me]. Used as a personal memo space.
-// Distinct id namespace ("dm_notes_<uid>") so it can't collide with a degenerate
-// 1:1 dm key.
-async function openOrCreateSelfDm() {
-  const myUid = state.user.uid;
-  const dmKey = "dm_notes_" + myUid;
-  const existing = state.channels.find((c) => c.id === dmKey);
-  if (existing) {
-    if (getMyHiddenDms().includes(dmKey)) await unhideDm(dmKey);
-    selectChannel(dmKey);
-    return;
-  }
-  try {
-    await setDoc(doc(db, "channels", dmKey), {
-      name: "dm",
-      description: "",
-      type: "dm",
-      members: [myUid],
-      createdByUid: myUid,
-      createdAt: serverTimestamp(),
-      lastMessageAt: serverTimestamp(),
-      isDefault: false,
-      archived: false,
-    });
-    selectChannelWhenReady(dmKey);
-  } catch (err) {
-    alert("Failed to open Notes: " + err.message);
-  }
-}
-
 async function openOrCreateDm(otherUid) {
   const myUid = state.user.uid;
   // Deterministic DM id so the same 2 people always share the same DM channel.
-  const dmKey = "dm_" + [myUid, otherUid].sort().join("_");
+  // dedupe handles the notes-to-self case (otherUid === myUid → members: [me]).
+  const members = [...new Set([myUid, otherUid])].sort();
+  const dmKey = "dm_" + members.join("_");
   // Does it already exist locally?
   const existing = state.channels.find((c) => c.id === dmKey);
   if (existing) {
@@ -2747,7 +2718,7 @@ async function openOrCreateDm(otherUid) {
       name: "dm",
       description: "",
       type: "dm",
-      members: [myUid, otherUid].sort(),
+      members,
       createdByUid: myUid,
       createdAt: serverTimestamp(),
       lastMessageAt: serverTimestamp(),
@@ -2778,7 +2749,7 @@ function selectChannelWhenReady(channelId, attemptsLeft = 10) {
 }
 
 // Render a list of users with checkboxes (multi) or click-to-pick (single).
-function renderMemberPicker(container, { multi, onPick }) {
+function renderMemberPicker(container, { multi, onPick, allowSelf }) {
   container.innerHTML = "";
   const users = state.allUsers
     .filter((u) => u.displayName && !isUserBanned(u))
@@ -2815,7 +2786,11 @@ function renderMemberPicker(container, { multi, onPick }) {
       const cb = document.createElement("input");
       cb.type = "checkbox";
       cb.value = u.uid;
-      if (isSelf) { cb.disabled = true; cb.checked = true; }
+      // Self is auto-included by default (e.g. team picker — you're always
+      // in the team you're creating). DM picker passes allowSelf=true so
+      // the user can also toggle self off, or pick *only* self for a
+      // notes-to-self channel.
+      if (isSelf && !allowSelf) { cb.disabled = true; cb.checked = true; }
       row.appendChild(cb);
     }
     row.appendChild(renderAvatar(u, "sm"));
