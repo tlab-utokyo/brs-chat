@@ -4409,26 +4409,47 @@ function chatLogoUrl() {
 
 const WEBHOOK_BOT_NAME = "BRS Community Chat";
 
-async function postWebhook(url, text) {
+async function postWebhook(url, text, opts = {}) {
   if (!url) return;
+  // Up to 4 image attachments — keeps the forwarded message readable.
+  const imageUrls = (opts.imageUrls || []).slice(0, 4);
   try {
     if (url.includes("hooks.slack.com")) {
-      // Slack accepts CORS form-encoded POSTs with a `payload` param.
+      // Slack: form-encoded `payload` JSON. The legacy `attachments[].image_url`
+      // field still works for incoming webhooks and renders inline previews.
       const payload = {
         text,
         username: WEBHOOK_BOT_NAME,
         icon_url: chatLogoUrl(),
       };
+      if (imageUrls.length > 0) {
+        payload.attachments = imageUrls.map((u) => ({ image_url: u, fallback: "image" }));
+      }
       const body = new URLSearchParams({ payload: JSON.stringify(payload) });
       await fetch(url, { method: "POST", body, mode: "no-cors" });
     } else if (url.includes("discord.com/api/webhooks") || url.includes("discordapp.com/api/webhooks")) {
-      // Discord accepts form-urlencoded content= for simple messages.
-      const body = new URLSearchParams({
-        content: text,
-        username: WEBHOOK_BOT_NAME,
-        avatar_url: chatLogoUrl(),
-      });
-      await fetch(url, { method: "POST", body, mode: "no-cors" });
+      // Discord: form-urlencoded for plain text, JSON for embeds.
+      if (imageUrls.length > 0) {
+        const payload = {
+          content: text,
+          username: WEBHOOK_BOT_NAME,
+          avatar_url: chatLogoUrl(),
+          embeds: imageUrls.map((u) => ({ image: { url: u } })),
+        };
+        await fetch(url, {
+          method: "POST",
+          mode: "no-cors",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      } else {
+        const body = new URLSearchParams({
+          content: text,
+          username: WEBHOOK_BOT_NAME,
+          avatar_url: chatLogoUrl(),
+        });
+        await fetch(url, { method: "POST", body, mode: "no-cors" });
+      }
     } else {
       // Teams (and generic) — expect JSON body. Standard Teams connector
       // doesn't support per-message icon override, so we just send text.
@@ -4507,9 +4528,13 @@ async function forwardToWebhooks({ kind, ch, m, permalink }) {
   const mdText      = `${heading} · [Open in Chat](${permalink})\n${body}`;
   // Discord: wrap URL in <…> to suppress its embed/preview unfurl.
   const discordText = `${heading} · [Open in Chat](<${permalink}>)\n${body}`;
-  if (w.slack)   postWebhook(w.slack, slackText);
-  if (w.teams)   postWebhook(w.teams, mdText);
-  if (w.discord) postWebhook(w.discord, discordText);
+  // Image attachments — Slack/Discord render them inline as previews.
+  const imageUrls = getMessageAttachments(m)
+    .filter((a) => a.kind === "image" && a.url)
+    .map((a) => a.url);
+  if (w.slack)   postWebhook(w.slack,   slackText,   { imageUrls });
+  if (w.teams)   postWebhook(w.teams,   mdText);
+  if (w.discord) postWebhook(w.discord, discordText, { imageUrls });
 }
 
 el.btnWebhookTest?.addEventListener("click", async () => {
