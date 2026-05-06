@@ -78,11 +78,25 @@ a:hover { text-decoration: underline; }
 .screen[hidden] { display: none !important; }
 
 /* ==== Sign-in / profile cards ==== */
-#signin-screen, #profile-screen {
+#signin-screen, #profile-screen, #invite-screen {
   align-items: center;
   justify-content: center;
   padding: 16px;
   background: linear-gradient(135deg, var(--surface-2), var(--page-bg));
+}
+
+/* Invite gate — stack the input + button + hint with consistent spacing
+   so the card looks the same shape as the sign-in card. */
+#form-invite {
+  display: grid;
+  gap: 12px;
+  margin-top: 8px;
+}
+#form-invite .hint {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-top: 0;
 }
 
 .signin-card {
@@ -168,7 +182,7 @@ a:hover { text-decoration: underline; }
 .alt-signin form { display: grid; gap: 10px; margin-top: 12px; }
 .alt-signin .hint { font-size: 0.8rem; color: var(--text-muted); line-height: 1.4; }
 
-input[type="text"], input[type="email"], textarea {
+input[type="text"], input[type="email"], input[type="password"], textarea {
   background: var(--surface);
   color: var(--text-color);
   border: 1px solid var(--border-color);
