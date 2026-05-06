@@ -2439,16 +2439,19 @@ async function attachFiles(files) {
     alert(`Only the first ${remaining} of ${files.length} files added (max ${MAX_ATTACHMENTS}).`);
     files = files.slice(0, remaining);
   }
-  for (const f of files) {
+  // Compress / decode all files in parallel — sequential awaiting was the
+  // main reason adding many photos felt slow.
+  const results = await Promise.all(files.map(async (f) => {
     try {
-      const att = await prepareAttachment(f);
-      if (att) {
-        state.pendingAttachments.push(att);
-      }
+      return { ok: true, att: await prepareAttachment(f) };
     } catch (err) {
       console.warn("attach failed", f.name, err);
-      alert(`Could not attach ${f.name}: ${err.message}`);
+      return { ok: false, name: f.name, message: err.message };
     }
+  }));
+  for (const r of results) {
+    if (r.ok && r.att) state.pendingAttachments.push(r.att);
+    else if (!r.ok) alert(`Could not attach ${r.name}: ${r.message}`);
   }
   renderAttachmentsStrip();
 }
@@ -2462,7 +2465,13 @@ async function prepareAttachment(file) {
     const isHeic = /hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name);
     let blob = file;
     let width = 0, height = 0;
-    if (!isHeic) {
+    // Skip the canvas re-encode for HEIC (browser can't decode) and for
+    // already-small files (Cloudinary's incoming transformation will cap
+    // the dimensions server-side anyway). This makes 10-photo drops near
+    // instant when the originals are mobile-camera JPEGs that are already
+    // in the few-hundred-KB range.
+    const SKIP_COMPRESS_BELOW = 1024 * 1024; // 1 MB
+    if (!isHeic && file.size > SKIP_COMPRESS_BELOW) {
       try {
         const res = await compressImage(file, 1600, 0.82, 1024 * 1024);
         blob = res.blob;
