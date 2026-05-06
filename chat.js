@@ -4438,10 +4438,10 @@ async function forwardToWebhooks({ kind, ch, m, permalink }) {
   const snippet = (m.text || (hasAttachment(m) ? "[attachment]" : "[message]")).slice(0, 300);
   const head = `*BRS Community — ${prefix}${threadTag}* in ${chLabel}\n${m.authorName}: ${snippet}`;
   // Hide the long permalink behind a labeled link per platform's syntax.
-  const slackText   = `${head}\n<${permalink}|↗ Open in BRS Chat>`;
-  const mdText      = `${head}\n[↗ Open in BRS Chat](${permalink})`;
+  const slackText   = `${head}\n<${permalink}|Open in Chat>`;
+  const mdText      = `${head}\n[Open in Chat](${permalink})`;
   // Discord: wrap URL in <…> to suppress its embed/preview unfurl.
-  const discordText = `${head}\n[↗ Open in BRS Chat](<${permalink}>)`;
+  const discordText = `${head}\n[Open in Chat](<${permalink}>)`;
   if (w.slack)   postWebhook(w.slack, slackText);
   if (w.teams)   postWebhook(w.teams, mdText);
   if (w.discord) postWebhook(w.discord, discordText);
