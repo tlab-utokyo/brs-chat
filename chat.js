@@ -4954,7 +4954,7 @@ el.formInvite?.addEventListener("submit", async (e) => {
   // Form has novalidate so we must enforce the agreement checkbox in JS.
   const agreeBox = document.getElementById("input-invite-agree");
   if (agreeBox && !agreeBox.checked) {
-    el.inviteError.textContent = "ご利用には上記への同意が必要です。";
+    el.inviteError.textContent = "You must agree to the terms above to continue.";
     el.inviteError.hidden = false;
     return;
   }
