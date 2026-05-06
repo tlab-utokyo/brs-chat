@@ -184,16 +184,14 @@
         <button type="button" id="btn-attach" class="icon-btn" aria-label="Attach image" title="Attach image"><svg class="icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.234 20.252 21 12.3"/><path d="m16 6-8.414 8.586a2 2 0 0 0 0 2.828 2 2 0 0 0 2.828 0l8.414-8.586a4 4 0 0 0 0-5.656 4 4 0 0 0-5.656 0l-8.415 8.585a6 6 0 1 0 8.486 8.486"/></svg></button>
         <button type="button" id="btn-poll" class="icon-btn" aria-label="Create poll" title="Create poll"><svg class="icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg></button>
         <button type="button" id="btn-search" class="icon-btn" aria-label="Search channel" title="Search this channel (/)"><svg class="icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></button>
-        <input type="file" id="input-file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" hidden>
+        <input type="file" id="input-file" multiple
+               accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain,text/csv,text/markdown,application/zip,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.md,.zip"
+               hidden>
         <textarea id="input-message" rows="1" placeholder="Message #general · Ctrl+Enter to send" maxlength="2000" aria-label="Message"></textarea>
         <button type="submit" id="btn-send" class="primary-btn">Send</button>
       </form>
       <div id="mention-dropdown" class="mention-dropdown" hidden role="listbox"></div>
-      <div id="attachment-preview" class="attachment-preview" hidden>
-        <img id="attachment-thumb" alt="">
-        <span id="attachment-name"></span>
-        <button type="button" id="btn-attachment-remove" class="icon-btn" aria-label="Remove attachment">×</button>
-      </div>
+      <div id="attachments-strip" class="attachments-strip" hidden></div>
       <div id="upload-status" class="upload-status" role="status" aria-live="polite"></div>
     </main>
   </section>

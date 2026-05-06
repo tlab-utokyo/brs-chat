@@ -260,10 +260,7 @@ const el = {
   inputMessage: $("input-message"),
   btnAttach: $("btn-attach"),
   inputFile: $("input-file"),
-  attachmentPreview: $("attachment-preview"),
-  attachmentThumb: $("attachment-thumb"),
-  attachmentName: $("attachment-name"),
-  btnAttachmentRemove: $("btn-attachment-remove"),
+  attachmentsStrip: $("attachments-strip"),
   uploadStatus: $("upload-status"),
   mentionDropdown: $("mention-dropdown"),
   notificationBanner: $("notification-banner"),
@@ -288,7 +285,7 @@ const state = {
   unsubPrivateChannels: null,
   unsubUsers: null,
   unsubMessages: null,
-  pendingAttachment: null,    // { file, blob, width, height }
+  pendingAttachments: [],     // Array of { kind, file, blob, width, height, previewUrl }; max MAX_ATTACHMENTS
   lastReadByChannel: {},      // mirror of userDoc
   channelLastMsgTs: {},       // last message ts per channel for unread calc
   allUsers: [],               // array of { uid, ...users/{uid} data }
@@ -1602,6 +1599,80 @@ function attachLongPressTooltip(el, textFn) {
   }, true);
 }
 
+// Returns the attachments array for a message — back-compat with the legacy
+// single `image` field. Always returns an array (possibly empty). Image
+// entries have { kind:"image", url, thumbUrl, width, height }; file entries
+// have { kind:"file", url, name, size, ext }.
+function getMessageAttachments(m) {
+  if (Array.isArray(m.attachments) && m.attachments.length > 0) return m.attachments;
+  if (m.image && m.image.url) {
+    return [{
+      kind: "image",
+      url: m.image.url,
+      thumbUrl: m.image.thumbUrl || m.image.url,
+      width: m.image.width,
+      height: m.image.height,
+    }];
+  }
+  return [];
+}
+
+// Quick check used by search snippets / push notifications — does this message
+// carry any visual or file attachment?
+function hasAttachment(m) {
+  return getMessageAttachments(m).length > 0 || (m.image && m.image.url);
+}
+
+function renderMessageAttachments(m, body) {
+  const atts = getMessageAttachments(m);
+  if (atts.length === 0) return;
+  const images = atts.filter((a) => a.kind === "image");
+  const files = atts.filter((a) => a.kind === "file");
+
+  if (images.length === 1) {
+    const img = document.createElement("img");
+    img.className = "message-image";
+    img.loading = "lazy";
+    img.src = images[0].thumbUrl || images[0].url;
+    img.alt = "attached image";
+    img.addEventListener("click", () => openLightbox(images[0].url));
+    body.appendChild(img);
+  } else if (images.length > 1) {
+    const grid = document.createElement("div");
+    grid.className = "message-images " + (images.length === 2 ? "cols-2" : "cols-3");
+    for (const im of images) {
+      const img = document.createElement("img");
+      img.loading = "lazy";
+      img.src = im.thumbUrl || im.url;
+      img.alt = "attached image";
+      img.addEventListener("click", () => openLightbox(im.url));
+      grid.appendChild(img);
+    }
+    body.appendChild(grid);
+  }
+
+  if (files.length > 0) {
+    const wrap = document.createElement("div");
+    wrap.className = "message-files";
+    for (const f of files) {
+      const a = document.createElement("a");
+      a.className = "message-file";
+      a.href = f.url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.download = f.name || "";
+      const ext = (f.ext || (f.name || "").split(".").pop() || "").toLowerCase();
+      a.innerHTML =
+        `<span class="file-icon">${fileEmoji(ext)}</span>` +
+        `<span class="file-name"></span>` +
+        (f.size ? `<span class="file-size">${formatBytes(f.size)}</span>` : "");
+      a.querySelector(".file-name").textContent = f.name || "(file)";
+      wrap.appendChild(a);
+    }
+    body.appendChild(wrap);
+  }
+}
+
 function renderMessage(m, channelId) {
   const li = document.createElement("li");
   li.className = "message";
@@ -1702,15 +1773,7 @@ function renderMessage(m, channelId) {
       body.appendChild(wrap);
     }
   }
-  if (m.image && m.image.thumbUrl) {
-    const img = document.createElement("img");
-    img.className = "message-image";
-    img.loading = "lazy";
-    img.src = m.image.thumbUrl;
-    img.alt = "attached image";
-    img.addEventListener("click", () => openLightbox(m.image.url));
-    body.appendChild(img);
-  }
+  renderMessageAttachments(m, body);
 
   // Replies summary
   if ((m.replyCount || 0) > 0) {
@@ -2257,14 +2320,16 @@ function insertMention(c) {
 el.formCompose.addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = el.inputMessage.value.trim();
-  if (!text && !state.pendingAttachment) return;
+  const hasAttachments = state.pendingAttachments.length > 0;
+  if (!text && !hasAttachments) return;
   if (!state.currentChannelId) return;
 
   const channelId = state.currentChannelId;
   const { mentionUids, mentionsEveryone } = parseMentions(text);
   const msg = {
     text: text || "",
-    image: null,
+    image: null,         // legacy field; new sends never use it
+    attachments: [],
     authorUid: state.user.uid,
     authorEmail: state.user.email,
     authorName: state.userDoc.displayName,
@@ -2282,15 +2347,20 @@ el.formCompose.addEventListener("submit", async (e) => {
   autoResizeTextarea(el.inputMessage);
   clearOwnTyping();
 
+  // Snapshot pending attachments before clearing so the strip empties immediately
+  // even though uploads still run in the background.
+  const pending = state.pendingAttachments.slice();
+  if (hasAttachments) clearAttachments();
+
   try {
-    if (state.pendingAttachment) {
-      el.uploadStatus.textContent = "Uploading image…";
-      msg.image = await uploadImage(state.pendingAttachment, channelId);
-      clearAttachment();
+    if (pending.length > 0) {
+      el.uploadStatus.textContent = `Uploading ${pending.length} attachment${pending.length === 1 ? "" : "s"}…`;
+      msg.attachments = await Promise.all(
+        pending.map((att) => uploadAttachment(att, channelId)),
+      );
       el.uploadStatus.textContent = "";
     }
     await addDoc(collection(db, "channels", channelId, "messages"), msg);
-    // Bump channel's lastMessageAt so the sidebar can sort by recent activity.
     updateDoc(doc(db, "channels", channelId), {
       lastMessageAt: serverTimestamp(),
     }).catch((e) => console.warn("lastMessageAt bump failed", e));
@@ -2298,21 +2368,33 @@ el.formCompose.addEventListener("submit", async (e) => {
     console.error(err);
     el.uploadStatus.textContent = "";
     alert("Send failed: " + err.message);
-    // Restore text so user doesn't lose their input.
     if (text) el.inputMessage.value = text;
   }
 });
 
 // ===========================================================================
-// Image attach / upload
+// Attachments (images + files) — multi-attach pipeline.
+//
+// Up to MAX_ATTACHMENTS items per message, mixed images + files.
+//   - kind="image": JPEG/PNG/WebP/HEIC/HEIF; canvas-compressed (≤1MB target)
+//     before upload. HEIC is sent as-is (Cloudinary transforms server-side).
+//   - kind="file": PDF/Office/text/zip; uploaded raw via raw/upload, capped
+//     at MAX_FILE_BYTES.
 // ===========================================================================
+
+const MAX_ATTACHMENTS = 10;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_FILE_BYTES  = 20 * 1024 * 1024;
+const ALLOWED_FILE_EXTS = new Set([
+  "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+  "txt", "csv", "md", "zip",
+]);
 
 el.btnAttach.addEventListener("click", () => el.inputFile.click());
 el.inputFile.addEventListener("change", async () => {
-  const file = el.inputFile.files?.[0];
+  const files = [...(el.inputFile.files || [])];
   el.inputFile.value = "";
-  if (!file) return;
-  await attachFile(file);
+  if (files.length) await attachFiles(files);
 });
 
 // Drag & drop.
@@ -2321,56 +2403,141 @@ el.messagesContainer.addEventListener("dragover", (e) => {
 });
 el.messagesContainer.addEventListener("drop", async (e) => {
   e.preventDefault();
-  const file = e.dataTransfer.files?.[0];
-  if (file) await attachFile(file);
+  const files = [...(e.dataTransfer.files || [])];
+  if (files.length) await attachFiles(files);
 });
 
-el.btnAttachmentRemove.addEventListener("click", clearAttachment);
-
-async function attachFile(file) {
+async function attachFiles(files) {
   clearFatal();
-  if (!file.type.startsWith("image/")) {
-    alert("Only image files are supported.");
+  const remaining = MAX_ATTACHMENTS - state.pendingAttachments.length;
+  if (remaining <= 0) {
+    alert(`Up to ${MAX_ATTACHMENTS} attachments per message.`);
     return;
   }
-  const isHeic = /hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name);
-  let blob = file;
-  let width = 0, height = 0;
-
-  if (!isHeic) {
-    // Client-side compression via canvas for JPEG/PNG/WebP.
-    // Target ≤1MB to bound Cloudinary ingest bandwidth.
+  if (files.length > remaining) {
+    alert(`Only the first ${remaining} of ${files.length} files added (max ${MAX_ATTACHMENTS}).`);
+    files = files.slice(0, remaining);
+  }
+  for (const f of files) {
     try {
-      const res = await compressImage(file, 1600, 0.82, 1024 * 1024);
-      blob = res.blob;
-      width = res.width;
-      height = res.height;
+      const att = await prepareAttachment(f);
+      if (att) {
+        state.pendingAttachments.push(att);
+      }
     } catch (err) {
-      console.warn("compression failed, uploading original", err);
+      console.warn("attach failed", f.name, err);
+      alert(`Could not attach ${f.name}: ${err.message}`);
     }
   }
-  // HEIC is sent as-is; Cloudinary's incoming transformation handles conversion.
-
-  if (blob.size > 10 * 1024 * 1024) {
-    alert("Image is too large (max 10MB).");
-    return;
-  }
-
-  state.pendingAttachment = { file, blob, width, height };
-
-  // Preview.
-  const previewUrl = isHeic ? "" : URL.createObjectURL(blob);
-  el.attachmentThumb.src = previewUrl;
-  el.attachmentThumb.style.display = isHeic ? "none" : "";
-  el.attachmentName.textContent = `${file.name} (${formatBytes(blob.size)})`;
-  el.attachmentPreview.hidden = false;
+  renderAttachmentsStrip();
 }
 
-function clearAttachment() {
-  state.pendingAttachment = null;
-  el.attachmentPreview.hidden = true;
-  if (el.attachmentThumb.src) URL.revokeObjectURL(el.attachmentThumb.src);
-  el.attachmentThumb.src = "";
+async function prepareAttachment(file) {
+  const ext = (file.name.split(".").pop() || "").toLowerCase();
+  const isImage = file.type.startsWith("image/") ||
+    /^(jpg|jpeg|png|webp|heic|heif)$/.test(ext);
+
+  if (isImage) {
+    const isHeic = /hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name);
+    let blob = file;
+    let width = 0, height = 0;
+    if (!isHeic) {
+      try {
+        const res = await compressImage(file, 1600, 0.82, 1024 * 1024);
+        blob = res.blob;
+        width = res.width;
+        height = res.height;
+      } catch (err) {
+        console.warn("compression failed, uploading original", err);
+      }
+    }
+    if (blob.size > MAX_IMAGE_BYTES) {
+      throw new Error(`image too large (max ${formatBytes(MAX_IMAGE_BYTES)})`);
+    }
+    return {
+      kind: "image",
+      file, blob, width, height,
+      name: file.name,
+      previewUrl: isHeic ? "" : URL.createObjectURL(blob),
+    };
+  }
+
+  if (!ALLOWED_FILE_EXTS.has(ext)) {
+    throw new Error(`unsupported file type ".${ext}"`);
+  }
+  if (file.size > MAX_FILE_BYTES) {
+    throw new Error(`file too large (max ${formatBytes(MAX_FILE_BYTES)})`);
+  }
+  return {
+    kind: "file",
+    file, blob: file,
+    name: file.name,
+    size: file.size,
+    mime: file.type || "application/octet-stream",
+    ext,
+    previewUrl: "",
+  };
+}
+
+function renderAttachmentsStrip() {
+  const strip = el.attachmentsStrip;
+  strip.innerHTML = "";
+  if (state.pendingAttachments.length === 0) {
+    strip.hidden = true;
+    return;
+  }
+  strip.hidden = false;
+  state.pendingAttachments.forEach((att, idx) => {
+    const chip = document.createElement("div");
+    chip.className = "attachment-chip";
+    if (att.kind === "image" && att.previewUrl) {
+      const img = document.createElement("img");
+      img.src = att.previewUrl;
+      img.alt = "";
+      chip.appendChild(img);
+    } else {
+      const icon = document.createElement("span");
+      icon.className = "chip-icon";
+      icon.textContent = att.kind === "image" ? "🖼" : fileEmoji(att.ext);
+      chip.appendChild(icon);
+    }
+    const name = document.createElement("span");
+    name.className = "chip-name";
+    name.textContent = `${att.name}${att.kind === "file" ? ` · ${formatBytes(att.size)}` : ""}`;
+    chip.appendChild(name);
+    const x = document.createElement("button");
+    x.type = "button";
+    x.className = "chip-remove";
+    x.textContent = "×";
+    x.setAttribute("aria-label", "Remove");
+    x.addEventListener("click", () => removeAttachment(idx));
+    chip.appendChild(x);
+    strip.appendChild(chip);
+  });
+}
+
+function removeAttachment(idx) {
+  const att = state.pendingAttachments[idx];
+  if (att?.previewUrl) URL.revokeObjectURL(att.previewUrl);
+  state.pendingAttachments.splice(idx, 1);
+  renderAttachmentsStrip();
+}
+
+function clearAttachments() {
+  for (const att of state.pendingAttachments) {
+    if (att.previewUrl) URL.revokeObjectURL(att.previewUrl);
+  }
+  state.pendingAttachments = [];
+  renderAttachmentsStrip();
+}
+
+function fileEmoji(ext) {
+  if (ext === "pdf") return "📕";
+  if (ext === "doc" || ext === "docx") return "📘";
+  if (ext === "xls" || ext === "xlsx" || ext === "csv") return "📗";
+  if (ext === "ppt" || ext === "pptx") return "📙";
+  if (ext === "zip") return "🗜";
+  return "📄";
 }
 
 function formatBytes(n) {
@@ -2405,44 +2572,60 @@ async function compressImage(file, maxEdge, quality, targetMaxBytes) {
   return { blob, width, height };
 }
 
-async function uploadImage({ blob, file }, channelId) {
-  // 1. Ask Cloud Function for a signed upload payload.
+async function uploadAttachment(att, channelId) {
+  // 1. Ask Cloud Function for a signed payload (image- or file-flavored).
   const getSig = httpsCallable(functions, "getUploadSignature");
-  const { data } = await getSig({ channelId });
-  const { timestamp, folder, upload_preset, signature, apiKey, cloudName } = data;
+  const { data: sig } = await getSig({ channelId, kind: att.kind });
+  // Defaults so an older not-yet-redeployed function (no resourceType field)
+  // still works for images. File kind requires the new function.
+  const {
+    timestamp, folder, upload_preset, signature, apiKey, cloudName,
+    resourceType = "image", useFilename = false,
+  } = sig;
 
-  // 2. POST to Cloudinary.
+  // 2. POST to Cloudinary. raw/upload for files, image/upload for images.
   const form = new FormData();
-  form.append("file", blob, file.name);
+  form.append("file", att.blob, att.file.name);
   form.append("api_key", apiKey);
   form.append("timestamp", String(timestamp));
   form.append("signature", signature);
   form.append("folder", folder);
-  form.append("upload_preset", upload_preset);
+  if (upload_preset) form.append("upload_preset", upload_preset);
+  if (useFilename) {
+    form.append("use_filename", "1");
+    form.append("unique_filename", "1");
+  }
 
-  const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
-    method: "POST",
-    body: form,
-  });
+  const endpoint = `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`;
+  const res = await fetch(endpoint, { method: "POST", body: form });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
     throw new Error(`Cloudinary upload failed (${res.status}): ${txt.slice(0, 200)}`);
   }
   const result = await res.json();
 
-  // 3. Use the original URL as thumb. The upload preset's incoming
-  // transformation already caps at 1920px with q_auto:good / f_auto, so the
-  // original is already optimized; CSS scales it down to 300px for display.
-  // Using the unmodified URL avoids Cloudinary's Strict Transformations
-  // rejecting ad-hoc transform URLs (returns HTTP 401).
-  const thumbUrl = result.secure_url;
-
+  if (att.kind === "image") {
+    // Use the original URL as thumb. The upload preset's incoming
+    // transformation caps at 1920px / q_auto:good / f_auto, so the original
+    // is already optimized; CSS scales it down to 300px. Using the
+    // unmodified URL avoids Strict Transformations 401 rejections.
+    return {
+      kind: "image",
+      publicId: result.public_id,
+      url: result.secure_url,
+      thumbUrl: result.secure_url,
+      width: result.width,
+      height: result.height,
+    };
+  }
   return {
+    kind: "file",
     publicId: result.public_id,
     url: result.secure_url,
-    thumbUrl,
-    width: result.width,
-    height: result.height,
+    name: att.name,
+    size: att.size,
+    mime: att.mime,
+    ext: att.ext,
   };
 }
 
@@ -3373,7 +3556,7 @@ function renderPinnedBar(docs, channelId) {
       `<span class="pinned-item-preview"></span>`;
     text.querySelector(".pinned-item-author").textContent =
       (getUserByUid(m.authorUid)?.displayName || m.authorName || "?") + ":";
-    const preview = (m.text || (m.image ? "[image]" : "[poll]")).slice(0, 120);
+    const preview = (m.text || (hasAttachment(m) ? "[attachment]" : "[poll]")).slice(0, 120);
     text.querySelector(".pinned-item-preview").textContent = preview;
     li.appendChild(text);
     li.addEventListener("click", () => scrollToMessage(m.id));
@@ -3747,7 +3930,7 @@ async function openBookmarks() {
         (ch ? (ch.type === "dm" ? "@" + dmLabel(ch) : "#" + ch.name) : "(channel)") +
         " · " + (getUserByUid(m.authorUid)?.displayName || m.authorName || "") + " · " + formatTime(m.createdAt);
       const text = document.createElement("div");
-      text.innerHTML = renderMessageBody(m.text || (m.image ? "[image]" : "[message]")).html;
+      text.innerHTML = renderMessageBody(m.text || (hasAttachment(m) ? "[attachment]" : "[message]")).html;
       bodyEl.appendChild(meta);
       bodyEl.appendChild(text);
       item.appendChild(bodyEl);
@@ -3961,7 +4144,10 @@ async function exportCurrentChannel() {
     } else {
       lines.push(`**${author}** · _${when}_${m.pinned ? " 📌" : ""}`);
       if (m.text) lines.push(m.text);
-      if (m.image?.url) lines.push(`[image](${m.image.url})`);
+      for (const a of getMessageAttachments(m)) {
+        const tag = a.kind === "file" ? `[${a.name || "file"}]` : "[image]";
+        lines.push(`${tag}(${a.url})`);
+      }
       // Reactions summary
       if (m.reactions) {
         const rx = Object.entries(m.reactions)
@@ -4191,7 +4377,7 @@ async function forwardToWebhooks({ kind, ch, m, permalink }) {
     : kind === "dm" ? "DM"
     : (isReply ? "thread reply" : "message");
   const threadTag = isReply && kind !== null ? " (thread reply)" : "";
-  const snippet = (m.text || (m.image ? "[image]" : "[message]")).slice(0, 300);
+  const snippet = (m.text || (hasAttachment(m) ? "[attachment]" : "[message]")).slice(0, 300);
   const text = `*BRS Community — ${prefix}${threadTag}* in ${chLabel}\n${m.authorName}: ${snippet}\n${permalink}`;
   if (w.slack)   postWebhook(w.slack, text);
   if (w.teams)   postWebhook(w.teams, text);
@@ -4268,7 +4454,7 @@ function renderMentionsView() {
     const liveName = getUserByUid(m.authorUid)?.displayName || m.authorName || "?";
     meta.textContent = `${kindLabel} · ${chTitle} · ${liveName} · ${formatTime(m.createdAt)}`;
     const text = document.createElement("div");
-    text.innerHTML = renderMessageBody(m.text || (m.image ? "[image]" : "[message]")).html;
+    text.innerHTML = renderMessageBody(m.text || (hasAttachment(m) ? "[attachment]" : "[message]")).html;
     bodyEl.appendChild(meta);
     bodyEl.appendChild(text);
     item.appendChild(bodyEl);
@@ -4505,7 +4691,7 @@ function maybeNotify(ch, m) {
     ? dmLabel(ch)
     : ("#" + ch.name);
   const title = `${author?.displayName || m.authorName || "New message"}  ·  ${chTitle}`;
-  const body = m.text || (m.image ? "[image]" : "");
+  const body = m.text || (hasAttachment(m) ? "[attachment]" : "");
   try {
     const n = new Notification(title, {
       body: body.slice(0, 180),
