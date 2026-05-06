@@ -4529,7 +4529,19 @@ async function forwardToWebhooks({ kind, ch, m, permalink }) {
   const threadTag = isReply && kind !== null ? " (thread reply)" : "";
   const snippet = (m.text || (hasAttachment(m) ? "[attachment]" : "[message]")).slice(0, 300);
   const heading = `*BRS Community — ${prefix}${threadTag}* in ${chLabel}`;
-  const body = `${m.authorName}: ${snippet}`;
+  // Slack/Discord webhooks only stack image previews vertically — there is
+  // no side-by-side gallery via incoming webhooks. To keep the forwarded
+  // message compact, we preview the first image only and add a "+N more"
+  // hint pointing to Open in Chat for the rest.
+  const allImageUrls = getMessageAttachments(m)
+    .filter((a) => a.kind === "image" && a.url)
+    .map((a) => a.url);
+  const previewUrls = allImageUrls.slice(0, 1);
+  const moreCount = allImageUrls.length - previewUrls.length;
+  const moreNote = moreCount > 0
+    ? `\n_+${moreCount} more image${moreCount === 1 ? "" : "s"} — Open in Chat_`
+    : "";
+  const body = `${m.authorName}: ${snippet}${moreNote}`;
   // Inline the labeled permalink at the end of the heading line so the
   // forwarded message is two lines (heading + Open in Chat / body) instead
   // of three with a dangling URL.
@@ -4537,13 +4549,9 @@ async function forwardToWebhooks({ kind, ch, m, permalink }) {
   const mdText      = `${heading} · [Open in Chat](${permalink})\n${body}`;
   // Discord: wrap URL in <…> to suppress its embed/preview unfurl.
   const discordText = `${heading} · [Open in Chat](<${permalink}>)\n${body}`;
-  // Image attachments — Slack/Discord render them inline as previews.
-  const imageUrls = getMessageAttachments(m)
-    .filter((a) => a.kind === "image" && a.url)
-    .map((a) => a.url);
-  if (w.slack)   postWebhook(w.slack,   slackText,   { imageUrls });
+  if (w.slack)   postWebhook(w.slack,   slackText,   { imageUrls: previewUrls });
   if (w.teams)   postWebhook(w.teams,   mdText);
-  if (w.discord) postWebhook(w.discord, discordText, { imageUrls });
+  if (w.discord) postWebhook(w.discord, discordText, { imageUrls: previewUrls });
 }
 
 el.btnWebhookTest?.addEventListener("click", async () => {
