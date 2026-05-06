@@ -4436,12 +4436,15 @@ async function forwardToWebhooks({ kind, ch, m, permalink }) {
     : (isReply ? "thread reply" : "message");
   const threadTag = isReply && kind !== null ? " (thread reply)" : "";
   const snippet = (m.text || (hasAttachment(m) ? "[attachment]" : "[message]")).slice(0, 300);
-  const head = `*BRS Community — ${prefix}${threadTag}* in ${chLabel}\n${m.authorName}: ${snippet}`;
-  // Hide the long permalink behind a labeled link per platform's syntax.
-  const slackText   = `${head}\n<${permalink}|Open in Chat>`;
-  const mdText      = `${head}\n[Open in Chat](${permalink})`;
+  const heading = `*BRS Community — ${prefix}${threadTag}* in ${chLabel}`;
+  const body = `${m.authorName}: ${snippet}`;
+  // Inline the labeled permalink at the end of the heading line so the
+  // forwarded message is two lines (heading + Open in Chat / body) instead
+  // of three with a dangling URL.
+  const slackText   = `${heading} · <${permalink}|Open in Chat>\n${body}`;
+  const mdText      = `${heading} · [Open in Chat](${permalink})\n${body}`;
   // Discord: wrap URL in <…> to suppress its embed/preview unfurl.
-  const discordText = `${head}\n[Open in Chat](<${permalink}>)`;
+  const discordText = `${heading} · [Open in Chat](<${permalink}>)\n${body}`;
   if (w.slack)   postWebhook(w.slack, slackText);
   if (w.teams)   postWebhook(w.teams, mdText);
   if (w.discord) postWebhook(w.discord, discordText);
