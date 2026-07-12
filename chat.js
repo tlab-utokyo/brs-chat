@@ -3121,8 +3121,13 @@ async function ensureJoinedGeneral() {
   }
   generalJoinAttempted = true;
   try {
+    // The type filter is required, not cosmetic: security rules are not
+    // filters, so a query is rejected outright unless its constraints prove
+    // every result is readable. Non-members may only read public channels, so
+    // a name-only query here is denied and the auto-join silently breaks.
     const snap = await getDocs(query(
       collection(db, "channels"),
+      where("type", "==", "public"),
       where("name", "==", GENERAL_CHANNEL_NAME),
     ));
     const d = snap.docs[0];
