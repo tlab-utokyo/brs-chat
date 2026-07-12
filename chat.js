@@ -759,6 +759,26 @@ document.addEventListener("click", (e) => {
   }
 });
 
+// --- Help / quick-start guide (embedded in a modal iframe) ---
+// The guide is a standalone page (help.html) served from the same origin. We
+// load it lazily on first open and pass the current theme so it matches the
+// app's light/dark mode.
+(function initHelp() {
+  const btn = document.getElementById("btn-help");
+  const dlg = document.getElementById("dialog-help");
+  const frame = document.getElementById("help-frame");
+  if (!btn || !dlg || !frame) return;
+  let loaded = false;
+  btn.addEventListener("click", () => {
+    if (!loaded) {
+      const theme = document.documentElement.dataset.theme || "light";
+      frame.src = `./help.html?theme=${encodeURIComponent(theme)}`;
+      loaded = true;
+    }
+    dlg.showModal();
+  });
+})();
+
 // ===========================================================================
 // Auth state observer
 // ===========================================================================
