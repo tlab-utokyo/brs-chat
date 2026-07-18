@@ -4384,7 +4384,6 @@ el.btnNotifPrefs?.addEventListener("click", () => {
 el.btnNotifPrefsCancel?.addEventListener("click", () => el.dialogNotifPrefs.close());
 el.formNotifPrefs?.addEventListener("submit", async (e) => {
   e.preventDefault();
-  const existing = state.userDoc?.notificationPrefs || {};
   // Public prefs — visible to anyone (no URLs here).
   const prefs = {
     dm: el.notifDm.checked,
@@ -4392,9 +4391,9 @@ el.formNotifPrefs?.addEventListener("submit", async (e) => {
     channel: el.notifChannel.checked,
     reactions: el.notifReactions.checked,
     all: el.notifAll.checked,
-    emailMention: existing.emailMention ?? DEFAULT_NOTIF_PREFS.emailMention,
-    emailDm: existing.emailDm ?? DEFAULT_NOTIF_PREFS.emailDm,
-    emailChannel: existing.emailChannel ?? DEFAULT_NOTIF_PREFS.emailChannel,
+    emailMention: el.notifEmailMention.checked,
+    emailDm: el.notifEmailDm.checked,
+    emailChannel: el.notifEmailChannel.checked,
     // webhooks intentionally NOT stored here anymore.
     webhooks: {},
   };

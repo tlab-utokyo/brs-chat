@@ -551,25 +551,24 @@
         <p id="webhook-test-status" class="status"></p>
       </fieldset>
 
-      <!--
-        Email delivery is FROZEN for now. The schema and save path are kept so
-        that existing values in Firestore are preserved, and the UI can be
-        re-enabled by removing the `hidden` attribute below when we decide to
-        ship email digests (Phase A or later).
-      -->
-      <fieldset class="notif-group" disabled hidden>
-        <legend>Email delivery (frozen)</legend>
+      <fieldset class="notif-group">
+        <legend>Email me when I'm away</legend>
+        <p class="hint">
+          Sent from <strong>noreply@biohybrid-robotics.com</strong>, and only when
+          you're not currently in the chat — so you catch what you missed without
+          being emailed twice. All off by default.
+        </p>
         <label class="checkbox-row">
           <input type="checkbox" id="notif-email-mention">
-          <span>Email me for personal @mentions</span>
-        </label>
-        <label class="checkbox-row">
-          <input type="checkbox" id="notif-email-dm">
-          <span>Email me for direct messages</span>
+          <span>Personal @mentions of me</span>
         </label>
         <label class="checkbox-row">
           <input type="checkbox" id="notif-email-channel">
-          <span>Email me for @channel broadcasts</span>
+          <span>@channel broadcasts in channels I'm in</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="notif-email-dm">
+          <span>Direct messages to me</span>
         </label>
       </fieldset>
 
