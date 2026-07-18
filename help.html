@@ -255,14 +255,15 @@ footer { margin-top: 62px; padding-top: 22px; border-top: 1px solid var(--line);
 
   <section aria-labelledby="s-notify">
     <div class="integrate">
-      <p class="eyebrow">Get buzzed on your phone</p>
-      <h2 id="s-notify">Forward messages to Slack, Teams, or Discord</h2>
-      <p class="sub">Already live in one of these all day? Send your BRS <strong>DMs</strong> and <strong>@mentions</strong> there, so the app you already have on your phone rings you. Set it up once — it keeps working even when the chat tab is closed.</p>
+      <p class="eyebrow">Get notified when you're away</p>
+      <h2 id="s-notify">Get pinged by Slack, Teams, Discord, or email</h2>
+      <p class="sub">Forward your BRS <strong>DMs</strong> and <strong>@mentions</strong> to an app you already keep open — or just get a plain <strong>email</strong>. Set it up once; it all keeps working even when the chat tab is closed.</p>
 
-      <div class="tabs" role="tablist" aria-label="Choose your app">
+      <div class="tabs" role="tablist" aria-label="Choose how to be notified">
         <button class="tab" role="tab" id="tab-slack" aria-controls="p-slack" aria-selected="true">Slack</button>
         <button class="tab" role="tab" id="tab-teams" aria-controls="p-teams" aria-selected="false">Teams</button>
         <button class="tab" role="tab" id="tab-discord" aria-controls="p-discord" aria-selected="false">Discord</button>
+        <button class="tab" role="tab" id="tab-email" aria-controls="p-email" aria-selected="false">Email</button>
       </div>
 
       <div class="panel" id="p-slack" role="tabpanel" aria-labelledby="tab-slack">
@@ -295,15 +296,22 @@ footer { margin-top: 62px; padding-top: 22px; border-top: 1px solid var(--line);
         </ol>
       </div>
 
-      <p class="tip" style="margin-top:20px"><strong>Choose what gets forwarded</strong> right below the URL — direct messages, personal @mentions, @channel broadcasts, or everything.</p>
+      <div class="panel" id="p-email" role="tabpanel" aria-labelledby="tab-email" hidden>
+        <p class="recipe-intro">The simplest option — no URL, no other app. Just switch it on in the chat.</p>
+        <ol class="steps">
+          <li><div>In BRS Chat, click your name → <strong>Notification settings</strong>.</div></li>
+          <li><div>Under <strong>Email me when I'm away</strong>, tick <strong>@mentions</strong>, <strong>@channel</strong>, and/or <strong>direct messages</strong>.</div></li>
+          <li><div>Hit <strong>Save</strong>. Emails arrive from <code class="inline">noreply@biohybrid-robotics.com</code>, and only when you're not currently in the chat — so you're never pinged twice.</div></li>
+        </ol>
+        <p class="tip"><strong>First email in your spam / junk folder?</strong> Mark it "not spam" so the rest land in your inbox.</p>
+      </div>
+
+      <p class="tip" style="margin-top:20px"><strong>Choose what reaches you</strong> — direct messages, personal @mentions, @channel broadcasts, or everything — right where you set each one up.</p>
 
       <div class="plain-note">
         <strong>Just want pop-ups in your browser?</strong> Notification settings also has plain <strong>browser notifications</strong> for DMs, mentions, and @channel — no setup beyond clicking <em>Allow</em>. On <strong>iPhone</strong>, open the site in Safari and use <strong>Share → Add to Home Screen</strong> first, then open it from that icon.
       </div>
 
-      <div class="plain-note">
-        <strong>Prefer email?</strong> Notification settings can also <strong>email you</strong> (from noreply@biohybrid-robotics.com) when you're mentioned or DM'd while you're away from the chat — all off by default. If the first one lands in your <strong>spam / junk folder</strong>, mark it "not spam" so the rest reach your inbox.
-      </div>
     </div>
   </section>
 
