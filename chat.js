@@ -224,6 +224,8 @@ const el = {
   notifEmailMention: $("notif-email-mention"),
   notifEmailDm: $("notif-email-dm"),
   notifEmailChannel: $("notif-email-channel"),
+  btnEmailTest: $("btn-email-test"),
+  emailTestStatus: $("email-test-status"),
   webhookSlack: $("webhook-slack"),
   webhookTeams: $("webhook-teams"),
   webhookDiscord: $("webhook-discord"),
@@ -4600,6 +4602,24 @@ el.btnWebhookTest?.addEventListener("click", async () => {
   for (const u of urls) await postWebhook(u, text);
   el.webhookTestStatus.textContent =
     "Sent. Check your Slack/Teams/Discord. (no-cors mode hides errors; if nothing arrives, double-check the URL.)";
+});
+
+// Send a test email to the signed-in user via the sendTestEmail callable.
+el.btnEmailTest?.addEventListener("click", async () => {
+  if (!el.emailTestStatus) return;
+  el.btnEmailTest.disabled = true;
+  el.emailTestStatus.textContent = "Sending…";
+  try {
+    const fn = httpsCallable(functions, "sendTestEmail");
+    await fn({});
+    el.emailTestStatus.textContent =
+      `Test sent to ${state.user?.email || "your email"}. ` +
+      `If it doesn't show up in a minute, check your spam / junk folder and mark it "not spam".`;
+  } catch (err) {
+    el.emailTestStatus.textContent = "Couldn't send: " + (err?.message || "please try again.");
+  } finally {
+    el.btnEmailTest.disabled = false;
+  }
 });
 
 // ===========================================================================
