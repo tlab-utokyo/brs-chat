@@ -3956,7 +3956,10 @@ function startHeartbeat() {
     } catch (_) { /* ignore */ }
   };
   beat();
-  state.heartbeatTimer = setInterval(beat, 30000);
+  // 2-minute heartbeat (was 30s). Presence writes fan out to every connected
+  // client's users subscription, so a longer interval cuts read cost ~4x. The
+  // online window below and the email online-skip are sized around this.
+  state.heartbeatTimer = setInterval(beat, 120000);
   window.addEventListener("focus", beat);
 }
 function stopHeartbeat() {
@@ -3966,7 +3969,9 @@ function isUserOnline(user) {
   const ts = user?.lastSeenAt;
   if (!ts) return false;
   const ms = ts.toMillis ? ts.toMillis() : (ts.seconds ? ts.seconds * 1000 : 0);
-  return Date.now() - ms < 90 * 1000;
+  // Online if seen within 4 min — comfortably longer than the 2-min heartbeat
+  // so the green dot doesn't flicker between beats.
+  return Date.now() - ms < 4 * 60 * 1000;
 }
 
 // ===========================================================================
