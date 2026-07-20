@@ -350,6 +350,8 @@ const BASE_TAB_TITLE = document.title;
 // ===========================================================================
 
 function showScreen(name) {
+  // Dismiss the instant loading overlay as soon as a real screen is shown.
+  document.getElementById("app-loading")?.remove();
   if (el.inviteScreen) el.inviteScreen.hidden = name !== "invite";
   el.signinScreen.hidden = name !== "signin";
   el.profileScreen.hidden = name !== "profile";
@@ -357,6 +359,7 @@ function showScreen(name) {
 }
 
 function showFatal(msg) {
+  document.getElementById("app-loading")?.remove();
   el.fatalError.textContent = msg;
   el.fatalError.hidden = false;
 }

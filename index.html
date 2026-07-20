@@ -15,6 +15,13 @@
 </head>
 <body>
 
+  <!-- Instant loading overlay — visible immediately on load, removed by chat.js
+       once the first screen (invite / sign-in / chat) renders. -->
+  <div id="app-loading" class="app-loading" role="status" aria-live="polite">
+    <div class="app-loading-spinner" aria-hidden="true"></div>
+    <p>Loading…</p>
+  </div>
+
   <!-- Invite-password gate (shown on first visit before sign-in) -->
   <section id="invite-screen" class="screen" hidden>
     <div class="signin-card invite-card">
