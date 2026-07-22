@@ -855,10 +855,12 @@ async function processAuthState(user) {
     setDoc(doc(db, "userEmails", user.uid), { email: user.email }, { merge: true })
       .catch((e) => console.warn("userEmails sync failed", e));
   }
-  // Keep photoURL in sync with current Google profile (it may change).
-  if (user.photoURL && state.userDoc.photoURL !== user.photoURL) {
+  // Adopt the Google profile photo ONLY when the user has no avatar yet — never
+  // clobber one they've set themselves (that used to make custom icons revert
+  // to the Google photo on every reload).
+  if (user.photoURL && !state.userDoc.photoURL) {
     updateDoc(userRef, { photoURL: user.photoURL }).catch((e) =>
-      console.warn("photoURL sync failed", e));
+      console.warn("photoURL adopt failed", e));
     state.userDoc.photoURL = user.photoURL;
   }
   renderUserMenu();
