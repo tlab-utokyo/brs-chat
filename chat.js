@@ -523,7 +523,7 @@ function avatarColorFor(key) {
 function renderAvatar(user, size) {
   const span = document.createElement("span");
   span.className = "avatar" + (size ? " avatar-" + size : "");
-  const name = user?.displayName || user?.authorName || user?.email || "?";
+  const name = user?.displayName || user?.authorName || "?";
   if (user?.photoURL) {
     const img = document.createElement("img");
     img.src = user.photoURL;
@@ -849,6 +849,12 @@ async function processAuthState(user) {
   }
   state.userDoc = snap.data();
   state.lastReadByChannel = state.userDoc.lastReadByChannel || {};
+  // Self-heal: keep the owner+admin-only email record current (used for email
+  // notifications and admin moderation; never exposed to other participants).
+  if (user.email) {
+    setDoc(doc(db, "userEmails", user.uid), { email: user.email }, { merge: true })
+      .catch((e) => console.warn("userEmails sync failed", e));
+  }
   // Keep photoURL in sync with current Google profile (it may change).
   if (user.photoURL && state.userDoc.photoURL !== user.photoURL) {
     updateDoc(userRef, { photoURL: user.photoURL }).catch((e) =>
@@ -872,16 +878,19 @@ el.formProfile.addEventListener("submit", async (e) => {
   if (!displayName) return;
   const user = state.user;
   const userRef = doc(db, "users", user.uid);
+  // Privacy: the public profile doc carries NO email. The address lives in
+  // userEmails/{uid}, readable only by the owner and admins (moderation/bans).
   await setDoc(userRef, {
-    email: user.email,
     displayName,
     affiliation,
     photoURL: user.photoURL || null,
     lastSeenAt: serverTimestamp(),
     lastReadByChannel: {},
   }, { merge: true });
+  setDoc(doc(db, "userEmails", user.uid), { email: user.email }, { merge: true })
+    .catch((e) => console.warn("userEmails write failed", e));
   state.userDoc = {
-    email: user.email, displayName, affiliation,
+    displayName, affiliation,
     photoURL: user.photoURL || null, lastReadByChannel: {},
   };
   renderUserMenu();
@@ -1432,8 +1441,8 @@ function dmLabel(ch) {
   if (isSelfDm(ch)) return "Notes (you)";
   const others = getDmOthers(ch);
   if (others.length === 0) return "(dm)";
-  if (others.length === 1) return others[0].displayName || others[0].email || "(unknown)";
-  const names = others.slice(0, 3).map((u) => u.displayName || u.email || "?").join(", ");
+  if (others.length === 1) return others[0].displayName || "(unknown)";
+  const names = others.slice(0, 3).map((u) => u.displayName || "?").join(", ");
   return others.length > 3 ? `${names} +${others.length - 3}` : names;
 }
 
@@ -1724,7 +1733,7 @@ function renderMessage(m, channelId) {
   // falling back to the photoURL denormalized onto the message.
   const authorUser = getUserByUid(m.authorUid) || {
     uid: m.authorUid, displayName: m.authorName,
-    photoURL: m.authorPhotoURL, email: m.authorEmail,
+    photoURL: m.authorPhotoURL,
   };
   // Banned users' avatar/name are not clickable — can't open profile or DM.
   const authorClickable = !!m.authorUid && !isUserBanned(m.authorUid);
@@ -1753,7 +1762,6 @@ function renderMessage(m, channelId) {
   const liveUser = getUserByUid(m.authorUid);
   const displayName = liveUser?.displayName || m.authorName || "unknown";
   const affiliation = liveUser?.affiliation ?? m.authorAffiliation ?? "";
-  const email = liveUser?.email || m.authorEmail || "";
   const authorEl = meta.querySelector(".message-author");
   authorEl.textContent = displayName;
   if (m.authorUid) {
@@ -1762,8 +1770,6 @@ function renderMessage(m, channelId) {
   }
   if (affiliation) meta.querySelector(".message-affiliation").textContent = affiliation;
   meta.querySelector(".message-time").textContent = formatTime(m.createdAt);
-  // Email shown as tooltip so users can verify identity even after a rename.
-  if (email) meta.title = email;
   body.appendChild(meta);
 
   if (m.deleted) {
@@ -2287,7 +2293,7 @@ function updateMentionAutocomplete(textarea) {
       user: u,
       token: "@" + mentionSlug(u.displayName),
       label: u.displayName,
-      sub: [u.affiliation, u.email].filter(Boolean).join(" · "),
+      sub: u.affiliation || "",
     }));
   const broadcasts = [
     { broadcast: true, key: "channel", label: "Notify everyone in this channel", token: "@channel" },
@@ -2377,7 +2383,6 @@ el.formCompose.addEventListener("submit", async (e) => {
     image: null,         // legacy field; new sends never use it
     attachments: [],
     authorUid: state.user.uid,
-    authorEmail: state.user.email,
     authorName: state.userDoc.displayName,
     authorAffiliation: state.userDoc.affiliation || "",
     mentions: mentionUids,
@@ -2952,14 +2957,21 @@ function showUserProfile(uid) {
   } else {
     el.userProfileAffiliation.hidden = true;
   }
-  if (u.email) {
-    el.userProfileEmail.textContent = u.email;
+  // Email is private: shown only to the viewer for their own card, or to admins
+  // (fetched from the restricted userEmails doc). Never shown between participants.
+  const isSelf = u.uid === state.user.uid;
+  el.userProfileEmail.hidden = true;
+  el.userProfileEmail.textContent = "";
+  if (isSelf && state.user.email) {
+    el.userProfileEmail.textContent = state.user.email;
     el.userProfileEmail.hidden = false;
-  } else {
-    el.userProfileEmail.hidden = true;
+  } else if (isAdmin()) {
+    getDoc(doc(db, "userEmails", u.uid)).then((snap) => {
+      const em = snap.exists() ? snap.data().email : "";
+      if (em) { el.userProfileEmail.textContent = em; el.userProfileEmail.hidden = false; }
+    }).catch(() => {});
   }
 
-  const isSelf = u.uid === state.user.uid;
   // Send DM hidden for self and for banned users (banned users can't sign in
   // anyway, and adding them as a DM member would silently re-include them).
   el.btnUserProfileDm.hidden = isSelf || banned;
@@ -3051,7 +3063,7 @@ function renderMemberPicker(container, { multi, onPick, allowSelf }) {
     searchInput = document.createElement("input");
     searchInput.type = "search";
     searchInput.className = "member-picker-search";
-    searchInput.placeholder = "Search by name, affiliation, or email…";
+    searchInput.placeholder = "Search by name or affiliation…";
     searchInput.autocomplete = "off";
     container.appendChild(searchInput);
   }
@@ -3077,10 +3089,10 @@ function renderMemberPicker(container, { multi, onPick, allowSelf }) {
     info.className = "member-info";
     const name = document.createElement("span");
     name.className = "member-name";
-    name.textContent = (u.displayName || u.email || "(unknown)") + (isSelf ? " (you)" : "");
+    name.textContent = (u.displayName || "(unknown)") + (isSelf ? " (you)" : "");
     const sub = document.createElement("span");
     sub.className = "member-sub";
-    sub.textContent = [u.affiliation, u.email].filter(Boolean).join(" · ");
+    sub.textContent = u.affiliation || "";
     info.appendChild(name);
     info.appendChild(sub);
     row.appendChild(info);
@@ -3103,9 +3115,7 @@ function renderMemberPicker(container, { multi, onPick, allowSelf }) {
       let visibleCount = 0;
       for (const { user, el } of rows) {
         const hay = (
-          (user.displayName || "") + " " +
-          (user.email || "") + " " +
-          (user.affiliation || "")
+          (user.displayName || "") + " " + (user.affiliation || "")
         ).toLowerCase();
         const match = !f || hay.includes(f);
         el.style.display = match ? "" : "none";
@@ -3228,11 +3238,10 @@ function renderMembersDialog() {
     info.className = "member-info";
     const name = document.createElement("span");
     name.className = "member-name";
-    const adminBadge = state.adminEmails.includes((u.email || "").toLowerCase()) ? " 🛡️" : "";
-    name.textContent = u.displayName + (isSelf ? " (you)" : "") + adminBadge;
+    name.textContent = u.displayName + (isSelf ? " (you)" : "");
     const sub = document.createElement("span");
     sub.className = "member-sub";
-    sub.textContent = [u.affiliation, u.email].filter(Boolean).join(" · ");
+    sub.textContent = u.affiliation || "";
     info.appendChild(name);
     info.appendChild(sub);
     row.appendChild(info);
@@ -3260,7 +3269,7 @@ function renderMembersDialog() {
       ban.className = "remove-btn ban-btn";
       ban.textContent = "Ban";
       ban.title = "Ban from BRS Chat (admin) — removes from all channels and blocks re-sign-in";
-      ban.addEventListener("click", () => banUser(u.uid, u.email, u.displayName));
+      ban.addEventListener("click", () => banUser(u.uid, u.displayName));
       row.appendChild(ban);
     }
     el.membersList.appendChild(row);
@@ -3285,7 +3294,7 @@ function renderMembersDialog() {
     name.textContent = u.displayName;
     const sub = document.createElement("span");
     sub.className = "member-sub";
-    sub.textContent = [u.affiliation, u.email].filter(Boolean).join(" · ");
+    sub.textContent = u.affiliation || "";
     info.appendChild(name);
     info.appendChild(sub);
     row.appendChild(info);
@@ -3324,7 +3333,7 @@ async function removeMember(channelId, uid) {
 // Ban: yank a user from every channel and prevent re-sign-in.
 // Past messages are preserved (delete them separately if needed).
 // Reversible via Unban from the Admin panel.
-async function banUser(uid, email, displayName) {
+async function banUser(uid, displayName) {
   if (!isAdmin()) return;
   if (uid === state.user.uid) {
     alert("You can't ban yourself.");
@@ -3341,6 +3350,13 @@ async function banUser(uid, email, displayName) {
     "",
   );
   if (reason === null) return;  // cancelled
+  // Email lives in the restricted userEmails doc; admins can read it. Adding it
+  // to the ban list blocks re-sign-in with the same address.
+  let email = "";
+  try {
+    const es = await getDoc(doc(db, "userEmails", uid));
+    email = es.exists() ? (es.data().email || "") : "";
+  } catch (_) { /* best-effort */ }
   try {
     // Find every channel the user is a member of and remove them in parallel.
     const snap = await getDocs(query(
@@ -3374,6 +3390,14 @@ async function unbanUser(uid, email, displayName) {
     `They'll be able to sign in again and will auto-rejoin #general on next sign-in. ` +
     `Other channels need to be invited manually.`
   )) return;
+  // Make sure we also clear the banned email, fetching it if the caller only
+  // had a uid (member docs no longer carry the address).
+  if (uid && !email) {
+    try {
+      const es = await getDoc(doc(db, "userEmails", uid));
+      email = es.exists() ? (es.data().email || "") : "";
+    } catch (_) { /* best-effort */ }
+  }
   try {
     const updates = {
       updatedAt: serverTimestamp(),
@@ -3430,16 +3454,25 @@ function renderAdminDialog() {
   renderMaintenanceControls();
 }
 
-function renderBansList() {
+async function renderBansList() {
   if (!el.bansList) return;
   el.bansList.innerHTML = "";
   // Build a unified list keyed by uid OR email (some entries may have only one).
+  // Emails are private, so admins fetch them from the restricted userEmails docs.
   const rows = [];
-  for (const uid of (state.bans.uids || [])) {
+  const uids = state.bans.uids || [];
+  const emailByUid = {};
+  await Promise.all(uids.map(async (uid) => {
+    try {
+      const es = await getDoc(doc(db, "userEmails", uid));
+      emailByUid[uid] = es.exists() ? (es.data().email || "").toLowerCase() : "";
+    } catch (_) { emailByUid[uid] = ""; }
+  }));
+  for (const uid of uids) {
     const u = state.allUsers.find((x) => x.uid === uid);
     rows.push({
       uid,
-      email: (u?.email || "").toLowerCase(),
+      email: emailByUid[uid] || "",
       displayName: u?.displayName || `(unknown user · uid ${uid.slice(0, 6)}…)`,
     });
   }
@@ -3742,8 +3775,7 @@ el.formThreadCompose.addEventListener("submit", async (e) => {
     await addDoc(collection(db, "channels", channelId, "messages", parentId, "replies"), {
       text,
       authorUid: state.user.uid,
-      authorEmail: state.user.email,
-      authorName: state.userDoc.displayName,
+        authorName: state.userDoc.displayName,
       authorAffiliation: state.userDoc.affiliation || "",
       mentions: mentionUids,
       mentionsEveryone,
@@ -3759,8 +3791,7 @@ el.formThreadCompose.addEventListener("submit", async (e) => {
       lastReply: {
         text,
         authorUid: state.user.uid,
-        authorEmail: state.user.email,
-        authorName: state.userDoc.displayName,
+            authorName: state.userDoc.displayName,
         mentions: mentionUids,
         mentionsEveryone,
       },
@@ -3869,8 +3900,7 @@ el.formPoll.addEventListener("submit", async (e) => {
         multi,
       },
       authorUid: state.user.uid,
-      authorEmail: state.user.email,
-      authorName: state.userDoc.displayName,
+        authorName: state.userDoc.displayName,
       authorAffiliation: state.userDoc.affiliation || "",
       mentions: [],
       mentionsEveryone: false,
@@ -4207,7 +4237,7 @@ function renderSwitcherResults(q) {
   }).slice(0, 20);
   // Users (for DM jump)
   const us = state.allUsers.filter((u) => u.uid !== state.user.uid && u.displayName)
-    .filter((u) => !qlow || (u.displayName + " " + (u.email || "")).toLowerCase().includes(qlow))
+    .filter((u) => !qlow || (u.displayName || "").toLowerCase().includes(qlow))
     .slice(0, 10);
   let first = true;
   for (const c of chs) {
@@ -4278,7 +4308,7 @@ async function exportCurrentChannel() {
     const m = d.data();
     if (m.deleted) continue;
     const when = m.createdAt?.toDate ? m.createdAt.toDate().toLocaleString() : "";
-    const author = m.authorName || m.authorEmail || "unknown";
+    const author = m.authorName || "unknown";
     if (m.type === "poll" && m.poll) {
       lines.push(`**${author}** · _${when}_  📊 **${m.poll.question}**`);
       for (const o of m.poll.options || []) {
@@ -4810,7 +4840,6 @@ function refreshChannelNotifyListeners() {
               text: m.lastReply.text,
               authorUid: m.lastReply.authorUid,
               authorName: m.lastReply.authorName,
-              authorEmail: m.lastReply.authorEmail,
               mentions: m.lastReply.mentions || [],
               mentionsEveryone: !!m.lastReply.mentionsEveryone,
               createdAt: m.lastReplyAt,
