@@ -278,13 +278,14 @@ footer { margin-top: 62px; padding-top: 22px; border-top: 1px solid var(--line);
       </div>
 
       <div class="panel" id="p-teams" role="tabpanel" aria-labelledby="tab-teams" hidden>
-        <p class="recipe-intro">Teams uses a channel <strong>connector</strong> called <strong>Incoming Webhook</strong>.</p>
+        <p class="recipe-intro">Teams does this with a <strong>Workflow</strong> — a personal address that lets BRS Chat post into a channel of yours. Your work (e.g. university) Teams is fine; no account linking involved.</p>
         <ol class="steps">
           <li><div>Pick or create a Teams channel for yourself.</div></li>
-          <li><div>Click the channel's <strong>•••</strong> menu → <strong>Connectors</strong> → find <strong>Incoming Webhook</strong> → <strong>Add</strong> → <strong>Configure</strong>.</div></li>
-          <li><div>Give it a name (e.g. <em>BRS Chat</em>), click <strong>Create</strong>, and copy the URL it shows.</div></li>
+          <li><div>Click the channel's <strong>•••</strong> menu → <strong>Workflows</strong> → pick <strong>"Post to a channel when a webhook request is received"</strong> → <strong>Next</strong> → <strong>Add workflow</strong>.</div></li>
+          <li><div>Copy the URL it shows (it contains <code class="inline">logic.azure.com</code>).</div></li>
           <li><div>In BRS Chat → your name → <strong>Notification settings</strong>, paste it in the <strong>Teams</strong> box, <strong>Save</strong>, then <strong>Send a test</strong>.</div></li>
         </ol>
+        <p class="tip"><strong>Older Teams?</strong> If your channel menu still offers <em>Connectors → Incoming Webhook</em>, that URL works too.</p>
       </div>
 
       <div class="panel" id="p-discord" role="tabpanel" aria-labelledby="tab-discord" hidden>

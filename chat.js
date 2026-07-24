@@ -4526,13 +4526,30 @@ async function postWebhook(url, text, opts = {}) {
         await fetch(url, { method: "POST", body, mode: "no-cors" });
       }
     } else {
-      // Teams (and generic) — expect JSON body. Standard Teams connector
-      // doesn't support per-message icon override, so we just send text.
+      // Teams (and generic) — JSON body. Classic Incoming Webhook connectors
+      // accept {text}; Teams Workflows URLs (logic.azure.com — Microsoft's
+      // replacement after retiring O365 connectors) need an Adaptive Card
+      // "message" envelope instead.
+      const isWorkflow = /logic\.azure\.com/i.test(url);
+      const body = isWorkflow
+        ? JSON.stringify({
+            type: "message",
+            attachments: [{
+              contentType: "application/vnd.microsoft.card.adaptive",
+              content: {
+                $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+                type: "AdaptiveCard",
+                version: "1.4",
+                body: [{ type: "TextBlock", text, wrap: true }],
+              },
+            }],
+          })
+        : JSON.stringify({ text });
       await fetch(url, {
         method: "POST",
         mode: "no-cors",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        body,
       });
     }
   } catch (err) {
