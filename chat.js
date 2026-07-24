@@ -4644,21 +4644,35 @@ async function forwardToWebhooks({ kind, ch, m, permalink }) {
   if (w.discord) postWebhook(w.discord, discordText, { imageUrls: previewUrls });
 }
 
+// Webhook test runs SERVER-SIDE (sendTestWebhook callable). Posting from the
+// browser can't work reliably: no-cors drops the JSON content-type that Teams
+// Workflows require, and opaque responses hide every failure. The server posts
+// with real headers and reports the true per-target result.
 el.btnWebhookTest?.addEventListener("click", async () => {
-  const url = el.webhookSlack.value.trim()
-    || el.webhookTeams.value.trim()
-    || el.webhookDiscord.value.trim();
-  if (!url) {
+  const payload = {
+    slack: el.webhookSlack.value.trim(),
+    teams: el.webhookTeams.value.trim(),
+    discord: el.webhookDiscord.value.trim(),
+    name: state.userDoc?.displayName || "you",
+  };
+  if (!payload.slack && !payload.teams && !payload.discord) {
     el.webhookTestStatus.textContent = "Paste at least one webhook URL first.";
     return;
   }
+  el.btnWebhookTest.disabled = true;
   el.webhookTestStatus.textContent = "Sending…";
-  const text = `✅ Hello from BRS Community! This is a test message for ${state.userDoc?.displayName || "you"}.`;
-  const urls = [el.webhookSlack.value, el.webhookTeams.value, el.webhookDiscord.value]
-    .map((s) => s.trim()).filter(Boolean);
-  for (const u of urls) await postWebhook(u, text);
-  el.webhookTestStatus.textContent =
-    "Sent. Check your Slack/Teams/Discord. (no-cors mode hides errors; if nothing arrives, double-check the URL.)";
+  try {
+    const fn = httpsCallable(functions, "sendTestWebhook");
+    const { data } = await fn(payload);
+    const parts = Object.entries(data.results || {}).map(([box, r]) =>
+      `${box[0].toUpperCase() + box.slice(1)}: ${r.ok ? "sent ✓" : "FAILED (" + (r.error || "HTTP " + r.status) + ")"}`);
+    el.webhookTestStatus.textContent = parts.join(" · ") +
+      (parts.some((p) => p.includes("FAILED")) ? " — double-check the URL." : " Check the app!");
+  } catch (err) {
+    el.webhookTestStatus.textContent = "Couldn't send: " + (err?.message || "please try again.");
+  } finally {
+    el.btnWebhookTest.disabled = false;
+  }
 });
 
 // Send a test email to the signed-in user via the sendTestEmail callable.
