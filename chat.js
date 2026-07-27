@@ -460,6 +460,9 @@ function renderMessageBody(text) {
   // 4) Bold and italic (non-greedy, simple)
   html = html.replace(/\*\*([^*\n][^*\n]*?)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/(^|[^*])\*(?!\s)([^*\n]+?)\*(?!\*)/g, "$1<em>$2</em>");
+  // Underline (__x__) and strikethrough (~~x~~).
+  html = html.replace(/__([^_\n]+?)__/g, "<u>$1</u>");
+  html = html.replace(/~~([^~\n]+?)~~/g, "<s>$1</s>");
   // 5) URLs
   html = html.replace(/\b((?:https?:\/\/|www\.)[^\s<>"')]+[^\s<>"')\.,;:!?])/gi, (url) => {
     const href = url.startsWith("www.") ? `https://${url}` : url;
@@ -2241,11 +2244,34 @@ function handleComposerKeydown(e, textarea, submitFn) {
       return;
     }
   }
+  // Formatting shortcuts: Ctrl/Cmd + B / I / U wrap the selection.
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+    const marker = { b: "**", i: "*", u: "__" }[e.key.toLowerCase()];
+    if (marker) { e.preventDefault(); wrapComposerSelection(textarea, marker); return; }
+  }
   // Ctrl/Cmd+Enter sends, plain Enter inserts a newline.
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.isComposing) {
     e.preventDefault();
     submitFn();
   }
+}
+
+// Wrap the textarea's current selection with a Markdown marker (or drop the
+// pair at the caret). Fires `input` so autoresize/typing indicators update.
+function wrapComposerSelection(textarea, marker) {
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const val = textarea.value;
+  const sel = val.slice(start, end);
+  textarea.value = val.slice(0, start) + marker + sel + marker + val.slice(end);
+  if (sel) {
+    textarea.setSelectionRange(start + marker.length, end + marker.length);
+  } else {
+    const pos = start + marker.length;
+    textarea.setSelectionRange(pos, pos);
+  }
+  textarea.focus();
+  textarea.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 el.inputMessage.addEventListener("input", () => {
@@ -2265,6 +2291,20 @@ el.inputThreadMessage.addEventListener("input", () => {
 el.inputThreadMessage.addEventListener("keydown", (e) =>
   handleComposerKeydown(e, el.inputThreadMessage, () => el.formThreadCompose.requestSubmit()));
 el.inputThreadMessage.addEventListener("blur", () => setTimeout(closeMentionAutocomplete, 150));
+
+// Formatting toolbars — each button wraps its composer's selection with a
+// Markdown marker (data-fmt). mousedown (not click) so the textarea keeps its
+// selection instead of losing focus first.
+function wireFormatToolbar(toolbar, textarea) {
+  toolbar?.addEventListener("mousedown", (e) => {
+    const b = e.target.closest("[data-fmt]");
+    if (!b) return;
+    e.preventDefault();
+    wrapComposerSelection(textarea, b.getAttribute("data-fmt"));
+  });
+}
+wireFormatToolbar(document.getElementById("compose-toolbar"), el.inputMessage);
+wireFormatToolbar(document.getElementById("thread-toolbar"), el.inputThreadMessage);
 
 function updateMentionAutocomplete(textarea) {
   textarea = textarea || el.inputMessage;
